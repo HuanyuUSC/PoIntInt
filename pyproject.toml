@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pointint"
+version = "0.1.0"
+requires-python = ">=3.9,<3.13"
+dependencies = [
+    "torch==2.8.0+cu126",
+    "torchvision==0.23.0+cu126",
+    "kaolin==0.18.0",
+    "warp-lang==1.9.0",
+    "loguru>=0.7.2",
+    "tqdm>=4.66.5",
+    "trimesh>=4.4.0",
+    "pyglet>=1.5.27,<2",
+    "k3d>=2.16.0",
+    "pip>=24.0",
+]
