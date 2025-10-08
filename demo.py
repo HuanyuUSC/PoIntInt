@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 from pyvistaqt import QtInteractor
+import warp as wp
 
 import pointint
 
@@ -26,6 +27,7 @@ SPHERE_HEIGHT = 0.8
 NUM_SAMPLES = 50_000
 GRAVITY = (0.0, 0.0, 0.0)
 FLOOR_HEIGHT = 0.0
+BALL_SPEED = 1.0  # Initial speed (m/s) for balls running towards each other
 
 
 def create_sphere_mesh(radius=SPHERE_RADIUS, subdivisions=SPHERE_RESOLUTION):
@@ -195,6 +197,28 @@ if __name__ == "__main__":
         meshes.append(mesh)
 
     scene, obj_indices = setup_scene(sim_objs)
+
+    # Set initial speeds - make balls run towards each other
+    # We must set sim_z_dot (velocity) instead of sim_z_prev
+    # because run_sim_step() overwrites sim_z_prev at the beginning!
+    t_z_dot = wp.to_torch(scene.sim_z_dot).clone()
+
+    # Get DOF indices for each object
+    obj0_dofs = wp.to_torch(scene.object_to_z_map[obj_indices[0]])
+    obj1_dofs = wp.to_torch(scene.object_to_z_map[obj_indices[1]])
+
+    # Set initial velocity directly in DOF space
+    # The last handle's Tx is at index -9 (12 DOFs per handle, offset 3 for Tx)
+    t_z_dot[obj0_dofs[-9]] = BALL_SPEED   # left ball → move right (+x direction)
+    t_z_dot[obj1_dofs[-9]] = -BALL_SPEED  # right ball → move left (-x direction)
+
+    # Use wp.copy to properly update warp array
+    wp.copy(src=wp.from_torch(t_z_dot, dtype=wp.float32), dest=scene.sim_z_dot)
+
+    logger.info(f"Initial velocity set: speed={BALL_SPEED} m/s in x-direction")
+
+    # Enable collisions
+    scene.enable_collisions(collision_particle_radius=0.1, collision_penalty=5000.0)
 
     app = QApplication(sys.argv)
     window = create_qt_app(meshes, orig_verts, sim_objs, scene, obj_indices, steps=200, period_ms=33)
