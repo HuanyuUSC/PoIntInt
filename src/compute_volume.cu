@@ -298,10 +298,12 @@ double compute_intersection_volume_cuda(
   int NF2 = (int)tris2.size();
   int Q  = (int)KG.kmag.size();
 
+  auto t_prepare_start = std::chrono::high_resolution_clock::now();
   // Create CUDA events for kernel timing
-  cudaEvent_t start, stop;
+  /*cudaEvent_t start, stop;
   cudaEventCreate(&start);
-  cudaEventCreate(&stop);
+  cudaEventCreate(&stop);*/
+  auto t_prepare_end = std::chrono::high_resolution_clock::now();
 
   TriPacked* d_tris1=nullptr;
   TriPacked* d_tris2=nullptr;
@@ -337,35 +339,42 @@ double compute_intersection_volume_cuda(
   size_t shmem = 0;
   
   // Record kernel start time
-  cudaEventRecord(start);
+  auto t_kernel_start = std::chrono::high_resolution_clock::now();
+  // cudaEventRecord(start);
   accumulate_intersection_volume_kernel<<<grid, block, shmem>>>(
     d_tris1, NF1, d_tris2, NF2, d_dirs, d_w, d_kmag, Q, d_out);
   // Record kernel stop time
-  cudaEventRecord(stop);
+  // cudaEventRecord(stop);
   cudaDeviceSynchronize();
-  
+  auto t_kernel_end = std::chrono::high_resolution_clock::now();
+
   // Get kernel execution time
   float kernel_ms = 0.0f;
-  cudaEventElapsedTime(&kernel_ms, start, stop);
+  // cudaEventElapsedTime(&kernel_ms, start, stop);
 
   auto t_result_start = std::chrono::high_resolution_clock::now();
   double I=0.0; // integral I
   cudaMemcpy(&I, d_out, sizeof(double), cudaMemcpyDeviceToHost);
   auto t_result_end = std::chrono::high_resolution_clock::now();
 
+  auto t_destroy_start = std::chrono::high_resolution_clock::now();
   cudaFree(d_tris1); cudaFree(d_tris2); cudaFree(d_dirs); cudaFree(d_kmag); cudaFree(d_w); cudaFree(d_out);
   
   // Clean up events
-  cudaEventDestroy(start);
-  cudaEventDestroy(stop);
+  // cudaEventDestroy(start);
+  // cudaEventDestroy(stop);
+  auto t_destroy_end = std::chrono::high_resolution_clock::now();
 
   // End total timing
   auto t_end_total = std::chrono::high_resolution_clock::now();
   
   // Calculate timing statistics
+  auto prepare_time = std::chrono::duration_cast<std::chrono::microseconds>(t_prepare_end - t_prepare_start).count() / 1000.0;
   auto malloc_time = std::chrono::duration_cast<std::chrono::microseconds>(t_malloc_end - t_malloc_start).count() / 1000.0;
   auto memcpy_time = std::chrono::duration_cast<std::chrono::microseconds>(t_memcpy_end - t_memcpy_start).count() / 1000.0;
+  auto kernel_time = std::chrono::duration_cast<std::chrono::microseconds>(t_kernel_end - t_kernel_start).count() / 1000.0;
   auto result_time = std::chrono::duration_cast<std::chrono::microseconds>(t_result_end - t_result_start).count() / 1000.0;
+  auto destroy_time = std::chrono::duration_cast<std::chrono::microseconds>(t_destroy_end - t_destroy_start).count() / 1000.0;
   auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end_total - t_start_total).count() / 1000.0;
   
   // Print timing information
@@ -376,10 +385,12 @@ double compute_intersection_volume_cuda(
   std::cout << "K-grid nodes: " << Q << std::endl;
   std::cout << "Block size: " << blockSize << std::endl;
   std::cout << "--- Timing (ms) ---" << std::endl;
+  std::cout << "  Preparation: " << std::setw(8) << prepare_time << " ms" << std::endl;
   std::cout << "  Memory allocation: " << std::setw(8) << malloc_time << " ms" << std::endl;
   std::cout << "  Memory copy (H->D): " << std::setw(8) << memcpy_time << " ms" << std::endl;
-  std::cout << "  Kernel execution:   " << std::setw(8) << kernel_ms << " ms" << std::endl;
+  std::cout << "  Kernel execution:   " << std::setw(8) << kernel_time << " ms" << std::endl;
   std::cout << "  Memory copy (D->H): " << std::setw(8) << result_time << " ms" << std::endl;
+  std::cout << "  Memory release: " << std::setw(8) << destroy_time << " ms" << std::endl;
   std::cout << "  Total time:         " << std::setw(8) << total_time << " ms" << std::endl;
   std::cout << "==========================================\n" << std::endl;
 

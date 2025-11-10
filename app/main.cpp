@@ -8,6 +8,7 @@
 #include <cmath>
 #include <corecrt_math_defines.h>
 #include <igl/readOFF.h>
+#include <chrono>
 
 double volume(const Eigen::MatrixXd& V, const Eigen::MatrixXi& F)
 {
@@ -90,8 +91,12 @@ int main(int argc, char** argv) {
   printf("Computed sphere integral: %g. Ground truth: %g. Rel err: %g%%\n", I, I_gt, abs(I - I_gt) / I_gt * 100.0);
 
   // For self-intersection, pass the same mesh twice
+  auto t_start = std::chrono::high_resolution_clock::now();
   double Vself = compute_intersection_volume_cuda(T1, T1, KG, 256);
+  auto t_end = std::chrono::high_resolution_clock::now();
+  auto compute_volume_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count() / 1000.0;
   double Vgt = volume(V, F);
   printf("Computed volume: %g, ground truth: %g, rel err: %g%%\n", Vself, Vgt, abs(Vself - Vgt) / Vgt * 100.0);
+  printf("Time used: %g[ms]\n", compute_volume_time);
   return 0;
 }
