@@ -41,25 +41,6 @@ __device__ __forceinline__ void cscalar_times_vec(float2 c, const float3& v, flo
   out_accum.zr += c.x * v.z; out_accum.zi += c.y * v.z;
 }
 
-// |A|^2 for complex 3-vector
-__device__ __forceinline__ double c3_norm2(const float3c& a){
-  double sx = (double)a.xr*(double)a.xr + (double)a.xi*(double)a.xi;
-  double sy = (double)a.yr*(double)a.yr + (double)a.yi*(double)a.yi;
-  double sz = (double)a.zr*(double)a.zr + (double)a.zi*(double)a.zi;
-  return sx+sy+sz;
-}
-
-// Real part of dot product: Real(A1 · A2*)
-// where A2* is the complex conjugate of A2
-__device__ __forceinline__ double c3_dot_real(const float3c& a1, const float3c& a2){
-  // Real(A1 · A2*) = Real((xr1 + i*xi1)(xr2 - i*xi2) + ...)
-  //                = xr1*xr2 + xi1*xi2 + yr1*yr2 + yi1*yi2 + zr1*zr2 + zi1*zi2
-  double dx = (double)a1.xr*(double)a2.xr + (double)a1.xi*(double)a2.xi;
-  double dy = (double)a1.yr*(double)a2.yr + (double)a1.yi*(double)a2.yi;
-  double dz = (double)a1.zr*(double)a2.zr + (double)a1.zi*(double)a2.zi;
-  return dx + dy + dz;
-}
-
 // sinc(z) = sin z / z, stable small-z
 __device__ __forceinline__ float sinc(float z) {
   float az = fabsf(z);
@@ -191,7 +172,7 @@ void accumulate_intersection_volume_kernel(
   float  kx = k*u.x, ky = k*u.y, kz = k*u.z;
 
   // Accumulate complex 3-vector A1(k) for mesh 1
-  float3c A1; A1.xr=A1.xi=A1.yr=A1.yi=A1.zr=A1.zi=0.0f;
+  float2 A1; A1.x = A1.y = 0.0f;
 
   // loop over faces of mesh 1 strided by threads
   for (int i = threadIdx.x; i < NF1; i += blockDim.x){
@@ -199,15 +180,17 @@ void accumulate_intersection_volume_kernel(
     // alpha = k · e1 ; beta = k · e2
     float alpha = kx*t.e1.x + ky*t.e1.y + kz*t.e1.z;
     float beta  = kx*t.e2.x + ky*t.e2.y + kz*t.e2.z;
+    float gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
     float2 phi  = Phi_ab(alpha, beta);      // complex scalar
     float phase = kx*t.a.x + ky*t.a.y + kz*t.a.z;
     float2 expp = cexp_i(phase);            // e^{i k·a}
     float2 scal = cmul(expp, phi);          // complex scalar
-    cscalar_times_vec(scal, t.S, A1);        // sum into A1
+    A1.x += scal.x * gamma;
+    A1.y += scal.y * gamma;
   }
 
   // Accumulate complex 3-vector A2(k) for mesh 2
-  float3c A2; A2.xr=A2.xi=A2.yr=A2.yi=A2.zr=A2.zi=0.0f;
+  float2 A2; A2.x = A2.y = 0.0f;
 
   // loop over faces of mesh 2 strided by threads
   for (int i = threadIdx.x; i < NF2; i += blockDim.x){
@@ -215,42 +198,36 @@ void accumulate_intersection_volume_kernel(
     // alpha = k · e1 ; beta = k · e2
     float alpha = kx*t.e1.x + ky*t.e1.y + kz*t.e1.z;
     float beta  = kx*t.e2.x + ky*t.e2.y + kz*t.e2.z;
+    float gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
     float2 phi  = Phi_ab(alpha, beta);      // complex scalar
     float phase = kx*t.a.x + ky*t.a.y + kz*t.a.z;
     float2 expp = cexp_i(phase);            // e^{i k·a}
     float2 scal = cmul(expp, phi);          // complex scalar
-    cscalar_times_vec(scal, t.S, A2);        // sum into A2
+    A2.x += scal.x * gamma;
+    A2.y += scal.y * gamma;
   }
 
   // intra-block reduction of A1 and A2
-  __shared__ float3c A1block, A2block; // one per block for each mesh
+  __shared__ float2 A1block, A2block; // one per block for each mesh
   if (threadIdx.x==0){ 
-    A1block.xr=A1block.xi=A1block.yr=A1block.yi=A1block.zr=A1block.zi=0.0f;
-    A2block.xr=A2block.xi=A2block.yr=A2block.yi=A2block.zr=A2block.zi=0.0f;
+    A1block.x=A1block.y=0.0f;
+    A2block.x=A2block.y=0.0f;
   }
   __syncthreads();
 
   // reduce A1 across threads with atomics on shared struct
-  atomicAdd(&A1block.xr, A1.xr);
-  atomicAdd(&A1block.xi, A1.xi);
-  atomicAdd(&A1block.yr, A1.yr);
-  atomicAdd(&A1block.yi, A1.yi);
-  atomicAdd(&A1block.zr, A1.zr);
-  atomicAdd(&A1block.zi, A1.zi);
+  atomicAdd(&A1block.x, A1.x);
+  atomicAdd(&A1block.y, A1.y);
 
   // reduce A2 across threads with atomics on shared struct
-  atomicAdd(&A2block.xr, A2.xr);
-  atomicAdd(&A2block.xi, A2.xi);
-  atomicAdd(&A2block.yr, A2.yr);
-  atomicAdd(&A2block.yi, A2.yi);
-  atomicAdd(&A2block.zr, A2.zr);
-  atomicAdd(&A2block.zi, A2.zi);
+  atomicAdd(&A2block.x, A2.x);
+  atomicAdd(&A2block.y, A2.y);
   __syncthreads();
 
   if (threadIdx.x==0){
     // contribution: weight_k * Real(A1 · A2*)
     // where A2* is the complex conjugate of A2
-    double dot_real = c3_dot_real(A1block, A2block);
+    float dot_real = A1block.x * A2block.x + A1block.y * A2block.y;
     double contrib = weights_k[q] * dot_real;
     atomicAdd(out_scalar, contrib);
   }
