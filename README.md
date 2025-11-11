@@ -31,21 +31,7 @@ The pipeline is:
 ---
 
 ## 1. Mathematical background
-
-### 1.1 Indicator via solid angle / double layer
-
-For a bounded region $\Omega \subset \mathbb{R}^3$ with boundary $\partial\Omega$ and outward normal $n(x)$, its indicator function $\chi_\Omega(p)$ can be written as a **double-layer potential** (solid angle of $\partial\Omega$ as seen from $p$):
-
-$$
-\chi_\Omega(p)
-  = -\frac{1}{4\pi}
-    \int_{\partial\Omega}
-      \frac{(p - x)\cdot n(x)}{\|p - x\|^3}\, dS_x.
-$$
-
-This equals $1$ when $p$ is inside $\Omega$ and $0$ outside, assuming a well-behaved closed surface. This is the same object that appears in generalized winding number formulations in geometry processing.
-
-### 1.2 Double surface integral for intersection volume
+### 1.1 Double surface integral for intersection volume
 
 For two solids $\Omega_1,\Omega_2$, the intersection volume is
 
@@ -155,45 +141,21 @@ $$
 where $w_q$ already includes Jacobian and quadrature weights.
 
 ---
-
-## 4. Matrix view for many objects
-
-If we have many solids $\Omega_1,\dots,\Omega_n$, we precompute their form-factor fields on the *same* set of k-nodes:
-
-- For each object $n$ and node $q$:
-  - Evaluate $F_n(k_q)$ or $A_n(k_q) = i k_q F_n(k_q)$.
-- Stack these into a matrix $J \in \mathbb{C}^{N_k \times n}$, one column per object.
-- Let $D \in \mathbb{R}^{N_k \times N_k}$ be diagonal, containing the weights
-  $w_q / \|k_q\|^2$.
-
-Then all pairwise intersection volumes are approximated (up to a global factor) by
-
-$$
-V \approx J^\top D J.
-$$
-
-So computing all $n\times n$ overlaps reduces to a **single symmetric matrix product**, which is GPU-friendly and easy to optimize.
-
----
-
-## 5. Analytic test shapes
+## 4. Analytic test shapes
 
 To debug and validate the k-space discretisation, the repo includes shapes with known closed-form Fourier transforms.
 
-### 5.1 Axis-aligned cube $[-1/2,1/2]^3$
+### 4.1 Axis-aligned cube $[-1/2,1/2]^3$
 
 $$
 F_{\text{cube}}(k)
   = \prod_{i=x,y,z}
-      \frac{\sin(k_i/2)}{k_i/2}
-  = \operatorname{sinc}\!\left(\frac{k_x}{2}\right)
-    \operatorname{sinc}\!\left(\frac{k_y}{2}\right)
-    \operatorname{sinc}\!\left(\frac{k_z}{2}\right),
+      \frac{\sin(k_i/2)}{k_i/2},
 $$
 
 so $F_{\text{cube}}(0) = 1$ (unit volume).
 
-### 5.2 Unit ball
+### 4.2 Unit ball
 
 $$
 F_{\text{ball}}(k)
@@ -208,7 +170,7 @@ We compare numerical quadrature against these analytic formulas to check converg
 
 ---
 
-## 6. Moments from $F(k)$
+## 5. Moments from $F(k)$
 
 A Taylor expansion of $F_n(k)$ around $k=0$
 
@@ -229,19 +191,46 @@ So once we have the Fourier data, we can also recover basic shape descriptors â€
 
 ---
 
-## 7. Relation to other approaches
+## 6. Applications
 
-The double surface integral and its Fourier rewrite connect this project to several existing ideas:
+### 6.1 Collision / contact detection via intersection volume
 
-- **Generalized winding numbers** (Jacobson et al., Barill et al.): use the same double-layer potential for robust inside/outside tests.  
-- **Boundary integral methods**: represent harmonic functions via layer potentials; our formula is essentially an interaction energy of two double layers.  
-- **View-factor integrals** in radiative heat transfer: similar normalâ€“normal kernels for energy exchange between surfaces.
+The core quantity this repo computes is the **intersection volume**
 
-Here, the focus is specifically on **intersection volume** and **pairwise overlap matrices** for arbitrary solids, evaluated mainly via the **Fourier method** rather than direct spatial quadrature or FMM.
+$$
+\mathrm{Vol}(\Omega_i \cap \Omega_j).
+$$
+
+For a collection of solids, the matrix
+
+$$
+V_{ij} \approx \mathrm{Vol}(\Omega_i \cap \Omega_j)
+$$
+
+from the $J^\top D J$ product can be used as a **pairwise collision / contact table**:
+
+- **Broad phase**: treat any pair with $V_{ij} > 0$ (or above a small threshold) as colliding.  
+- **Narrow phase / contact strength**: the magnitude of $V_{ij}$ can serve as a simple **penetration / overlap measure**, which could be mapped to penalty forces or used to prioritize more accurate local queries.
+
+Because the computation is cast as a matrix multiplication on shared k-nodes, you get all pairwise overlaps in one GPU-friendly operation instead of checking each pair independently.
+
+### 6.2 Shape similarity from normalized overlap
+
+Once we can evaluate intersection volumes, we get a simple **shape similarity score** for free. For two solids $\Omega_1$ and $\Omega_2$, define
+
+
+$S(\Omega_1, \Omega_2) = \dfrac{\mathrm{Vol}(\Omega_1 \cap \Omega_2)}{\sqrt{\mathrm{Vol}(\Omega_1)\,\mathrm{Vol}(\Omega_2)}}.$
+
+Basic properties:
+
+- $0 \le S(\Omega_1,\Omega_2) \le 1$.  
+- $S = 1$ if the shapes coincide almost everywhere.  
+- $S = 0$ if they are disjoint.  
+- If both shapes are scaled by the same global factor, $S$ is unchanged (volumes scale out)
 
 ---
 
-## 8. Status and roadmap
+## 7. Status and roadmap
 
 Planned / current components:
 
@@ -256,6 +245,6 @@ Planned / current components:
 
 ---
 
-## 9. License
+## 8. License
 
 TBD.
