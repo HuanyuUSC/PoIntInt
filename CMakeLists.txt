@@ -146,6 +146,21 @@ if(BUILD_EXE)
   endif()
 endif()
 
+# ---- Unit Tests ----
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_unit_cube.cpp")
+    add_executable(poIntInt_test test/test_unit_cube.cpp)
+    target_link_libraries(poIntInt_test PRIVATE poIntInt_core)
+    set_target_properties(poIntInt_test PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+      FOLDER "test"
+    )
+  endif()
+endif()
+
 # ---- Status Output ----
 message(STATUS "CMAKE_BUILD_TYPE                = ${CMAKE_BUILD_TYPE}")
 message(STATUS "CMAKE_CUDA_ARCHITECTURES        = ${CMAKE_CUDA_ARCHITECTURES}")
