@@ -222,8 +222,21 @@ bool test_volume_from_form_factor_integral(const std::string& leb_file, int Nrad
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
-  // Integrate |F(k)|² over k-space
-  // Volume = (1/(8π³)) ∫ |A(k)|² / |k|² d³k = (1/(8π³)) ∫ |F(k)|² d³k
+  // According to theory (form_factor_intersection_theory.md, section 1):
+  // V_∩(t=0) = (1/(2π)³) ∫ |F(k)|² d³k for self-intersection
+  // 
+  // The weights KG.w are set up for the A(k) formulation used in the CUDA code:
+  //   KG.w[q] = w_angular * w_radial * sec²(t)
+  // where k = tan(t), and this accounts for dk = sec²(t) dt
+  //
+  // For the F(k) integral, we need: ∫ |F(k)|² d³k
+  // In spherical coordinates: d³k = k² dk dΩ
+  // With k = tan(t), dk = sec²(t) dt, so: d³k = k² sec²(t) dt dΩ
+  //
+  // So the weight should be: w_angular * w_radial * k² * sec²(t)
+  // But KG.w = w_angular * w_radial * sec²(t) (missing k² factor)
+  // Therefore we multiply by k² to get the correct d³k measure
+  
   double integral = 0.0;
   
   for (int q = 0; q < KG.kmag.size(); ++q) {
@@ -233,17 +246,16 @@ bool test_volume_from_form_factor_integral(const std::string& leb_file, int Nrad
     double ky = k * dir[1];
     double kz = k * dir[2];
     
-    // |F(k)|²
+    // |F(k)|² using exact formula for unit cube
     double F = exact_cube_form_factor(kx, ky, kz);
     double F2 = F * F;
     
-    // Weight already includes d³k = k² dk dΩ transformation
-    // But we need |F(k)|², not |A(k)|²/|k|²
-    // Since |A(k)|² = |k|² |F(k)|², we have |A(k)|²/|k|² = |F(k)|²
-    // So we can use the same weights
+    // Weight includes w_angular * w_radial * sec²(t)
+    // We need k² factor for d³k = k² sec²(t) dt dΩ
     integral += KG.w[q] * F2 * k * k;
   }
   
+  // Use the formula from theory: V = (1/(2π)³) ∫ |F(k)|² d³k
   double volume_computed = integral / (8.0 * M_PI * M_PI * M_PI);
   double volume_exact = 1.0;  // Unit cube volume
   
