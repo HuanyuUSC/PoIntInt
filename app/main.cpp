@@ -52,7 +52,7 @@ int main(int argc, char** argv) {
   Eigen::MatrixXd V;
   Eigen::MatrixXi F;
   igl::readOFF("F:/Dropbox/3Dmodels/100 selected meshes/100 selected meshes/head2.off", V, F);
-  auto T1 = pack_tris(V, F);
+  auto geom1 = make_triangle_mesh(V, F);
 
   //// --- Example: unit cube [0,1]^3 triangulated
   //Eigen::MatrixXd V(8, 3); V <<
@@ -69,12 +69,12 @@ int main(int argc, char** argv) {
   //  0, 3, 7, 0, 7, 4,   // x=0
   //  1, 5, 6, 1, 6, 2;   // x=1
 
-  //auto T1 = pack_tris(V, F);
+  //auto geom1 = make_triangle_mesh(V, F);
 
   Eigen::Vector3d t(0, 0, 0);
   Eigen::MatrixXd V2 = V;
   for (int i = 0; i < V.rows(); i++) V2.row(i) += t;
-  auto T2 = pack_tris(V2, F);
+  auto geom2 = make_triangle_mesh(V2, F);
 
   // Load Lebedev (e.g., 302-point set); weights should sum to 4π
   LebedevGrid L = load_lebedev_txt(leb_file);
@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
 
   // For self-intersection, pass the same mesh twice
   auto t_start = std::chrono::high_resolution_clock::now();
-  double Vself = compute_intersection_volume_cuda(T1, T1, KG, 256);
+  double Vself = compute_intersection_volume_cuda(geom1, geom1, KG, 256);
   auto t_end = std::chrono::high_resolution_clock::now();
   auto compute_volume_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count() / 1000.0;
   double Vgt = volume(V, F);

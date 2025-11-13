@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <math_constants.h>
 #include "compute_volume.hpp"
+#include "geometry.hpp"
 #include "geometry_types.hpp"
 
 // ===================== utilities =====================
@@ -299,7 +300,8 @@ void accumulate_intersection_volume_kernel(
 // Unified intersection volume computation supporting both meshes and point clouds
 namespace PoIntInt {
 
-double compute_intersection_volume_cuda(
+// Internal implementation (not exposed in header)
+static double compute_intersection_volume_cuda_impl(
   const std::vector<TriPacked>& tris1,
   const std::vector<DiskPacked>& disks1,
   GeometryType type1,
@@ -456,17 +458,16 @@ double compute_intersection_volume_cuda(
   return I / (8.0 * CUDART_PI * CUDART_PI * CUDART_PI);
 }
 
-// Legacy function for triangle-triangle intersection (backward compatibility)
+// Main interface using Geometry struct
 double compute_intersection_volume_cuda(
-  const std::vector<TriPacked>& tris1,
-  const std::vector<TriPacked>& tris2,
+  const Geometry& geom1,
+  const Geometry& geom2,
   const KGrid& KG,
   int blockSize)
 {
-  std::vector<DiskPacked> empty_disks1, empty_disks2;
-  return compute_intersection_volume_cuda(
-    tris1, empty_disks1, GEOM_TRIANGLE,
-    tris2, empty_disks2, GEOM_TRIANGLE,
+  return compute_intersection_volume_cuda_impl(
+    geom1.tris, geom1.disks, geom1.type,
+    geom2.tris, geom2.disks, geom2.type,
     KG, blockSize);
 }
 

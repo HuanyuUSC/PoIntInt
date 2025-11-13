@@ -1,4 +1,5 @@
 #include "geometry_packing.hpp"
+#include "geometry.hpp"
 #include "gauss_legendre.hpp"
 #include <cmath>
 #include <cassert>
@@ -84,6 +85,25 @@ std::vector<DiskPacked> pack_disks(
     D[i].area = (float)area;
   }
   return D;
+}
+
+// Factory function: create Geometry from triangle mesh
+Geometry make_triangle_mesh(const Eigen::MatrixXd& V, const Eigen::MatrixXi& F) {
+  Geometry geom(GEOM_TRIANGLE);
+  geom.tris = pack_tris(V, F);
+  return geom;
+}
+
+// Factory function: create Geometry from point cloud
+Geometry make_point_cloud(
+  const Eigen::MatrixXd& P,
+  const Eigen::MatrixXd& N,
+  const Eigen::VectorXd& radii_or_areas,
+  bool is_radius)
+{
+  Geometry geom(GEOM_DISK);
+  geom.disks = pack_disks(P, N, radii_or_areas, is_radius);
+  return geom;
 }
 
 } // namespace PoIntInt

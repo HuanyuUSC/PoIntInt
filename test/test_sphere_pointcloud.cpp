@@ -174,7 +174,7 @@ bool test_sphere_form_factor_field(const std::string& leb_file, int Nrad = 32) {
   Eigen::MatrixXd P, N;
   Eigen::VectorXd radii;
   create_sphere_pointcloud(P, N, radii, 1000);
-  auto disks = pack_disks(P, N, radii, true);
+  auto geom = make_point_cloud(P, N, radii, true);
   
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);
@@ -200,7 +200,7 @@ bool test_sphere_form_factor_field(const std::string& leb_file, int Nrad = 32) {
     double k_mag = std::sqrt(kx*kx + ky*ky + kz*kz);
     
     // Compute A_parallel(k) from point cloud
-    std::pair<double, double> A_mesh = compute_scalar_Ak_from_pointcloud(disks, k_test.first, k_test.second);
+    std::pair<double, double> A_mesh = compute_scalar_Ak_from_pointcloud(geom.disks, k_test.first, k_test.second);
     double Ak2_mesh = A_mesh.first * A_mesh.first + A_mesh.second * A_mesh.second;
     
     // Exact |A(k)|² for sphere (depends only on |k|)
@@ -296,18 +296,14 @@ bool test_pointcloud_volume_computation(const std::string& leb_file, int Nrad = 
   Eigen::MatrixXd P, N;
   Eigen::VectorXd radii;
   create_sphere_pointcloud(P, N, radii, 2000);  // More points for better accuracy
-  auto disks = pack_disks(P, N, radii, true);
+  auto geom = make_point_cloud(P, N, radii, true);
   
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute volume using CUDA
-  std::vector<TriPacked> empty_tris;
-  double volume_computed = compute_intersection_volume_cuda(
-    empty_tris, disks, GEOM_DISK,
-    empty_tris, disks, GEOM_DISK,
-    KG, 256);
+  double volume_computed = compute_intersection_volume_cuda(geom, geom, KG, 256);
   double volume_exact = 4.0 * M_PI / 3.0;  // Unit sphere volume
   
   double rel_error = std::abs(volume_computed - volume_exact) / volume_exact;
@@ -345,7 +341,7 @@ bool test_mesh_pointcloud_intersection(const std::string& leb_file, int Nrad = 9
     0, 2, 1,  0, 3, 2,  4, 5, 6,  4, 6, 7,
     0, 1, 5,  0, 5, 4,  2, 7, 6,  2, 3, 7,
     0, 4, 7,  0, 7, 3,  1, 6, 5,  1, 2, 6;
-  auto tris = pack_tris(V_cube, F_cube);
+  auto geom_mesh = make_triangle_mesh(V_cube, F_cube);
   
   // Create unit sphere point cloud (centered at origin, radius 0.5 so it fits inside cube)
   Eigen::MatrixXd P, N;
@@ -353,17 +349,14 @@ bool test_mesh_pointcloud_intersection(const std::string& leb_file, int Nrad = 9
   create_sphere_pointcloud(P, N, radii, 1000);
   P *= 0.5;  // Scale to radius 0.5
   radii *= 0.5;  // Scale radii
-  auto disks = pack_disks(P, N, radii, true);
+  auto geom_pointcloud = make_point_cloud(P, N, radii, true);
   
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute intersection volume
-  double volume_computed = compute_intersection_volume_cuda(
-    tris, std::vector<DiskPacked>(), GEOM_TRIANGLE,
-    std::vector<TriPacked>(), disks, GEOM_DISK,
-    KG, 256);
+  double volume_computed = compute_intersection_volume_cuda(geom_mesh, geom_pointcloud, KG, 256);
   
   // Expected volume: volume of sphere with radius 0.5 = (4π/3) * (0.5)³ = π/6
   double volume_exact = M_PI / 6.0;

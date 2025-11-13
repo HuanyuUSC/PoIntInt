@@ -158,7 +158,7 @@ bool test_form_factor_field(const std::string& leb_file, int Nrad = 32) {
   Eigen::MatrixXd V;
   Eigen::MatrixXi F;
   create_unit_cube_mesh(V, F);
-  auto T = pack_tris(V, F);
+  auto geom = make_triangle_mesh(V, F);
 
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);
@@ -183,7 +183,7 @@ bool test_form_factor_field(const std::string& leb_file, int Nrad = 32) {
     double kz = k_test.first[2] * k_test.second;
     
     // Compute A(k) from mesh
-    std::pair<double, double> A_mesh = compute_scalar_Ak_from_mesh(T, k_test.first, k_test.second);
+    std::pair<double, double> A_mesh = compute_scalar_Ak_from_mesh(geom.tris, k_test.first, k_test.second);
     double Ak2_mesh = A_mesh.first * A_mesh.first + A_mesh.second * A_mesh.second;
     
     // Exact |A(k)|²
@@ -285,14 +285,14 @@ bool test_mesh_volume_computation(const std::string& leb_file, int Nrad = 96) {
   Eigen::MatrixXd V;
   Eigen::MatrixXi F;
   create_unit_cube_mesh(V, F);
-  auto T = pack_tris(V, F);
+  auto geom = make_triangle_mesh(V, F);
   
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute volume using CUDA
-  double volume_computed = compute_intersection_volume_cuda(T, T, KG, 256);
+  double volume_computed = compute_intersection_volume_cuda(geom, geom, KG, 256);
   double volume_exact = 1.0;  // Unit cube volume
   
   double rel_error = std::abs(volume_computed - volume_exact) / volume_exact;
