@@ -303,7 +303,7 @@ bool test_pointcloud_volume_computation(const std::string& leb_file, int Nrad = 
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute volume using CUDA
-  double volume_computed = compute_intersection_volume_cuda(geom, geom, KG, 256);
+  double volume_computed = compute_intersection_volume_cuda(geom, geom, KG, 256, true);
   double volume_exact = 4.0 * M_PI / 3.0;  // Unit sphere volume
   
   double rel_error = std::abs(volume_computed - volume_exact) / volume_exact;
@@ -356,7 +356,7 @@ bool test_mesh_pointcloud_intersection(const std::string& leb_file, int Nrad = 9
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute intersection volume
-  double volume_computed = compute_intersection_volume_cuda(geom_mesh, geom_pointcloud, KG, 256);
+  double volume_computed = compute_intersection_volume_cuda(geom_mesh, geom_pointcloud, KG, 256, true);
   
   // Expected volume: volume of sphere with radius 0.5 = (4π/3) * (0.5)³ = π/6
   double volume_exact = M_PI / 6.0;

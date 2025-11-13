@@ -232,7 +232,7 @@ bool test_multi_object_volume_matrix(const std::string& leb_file, int Nrad = 96)
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute volume matrix
-  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256);
+  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256, true);
   
   std::cout << std::fixed << std::setprecision(6);
   std::cout << "Volume matrix (3 objects):" << std::endl;
@@ -349,7 +349,7 @@ bool test_three_sphere_pointclouds(const std::string& leb_file, int Nrad = 96) {
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute volume matrix
-  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256);
+  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256, true);
   
   std::cout << std::fixed << std::setprecision(6);
   std::cout << "Volume matrix (3 sphere point clouds):" << std::endl;
@@ -493,7 +493,7 @@ bool test_mixed_geometry_types(const std::string& leb_file, int Nrad = 96) {
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute volume matrix
-  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256);
+  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256, true);
   
   std::cout << std::fixed << std::setprecision(6);
   std::cout << "Volume matrix (2 cubes + 2 spheres):" << std::endl;

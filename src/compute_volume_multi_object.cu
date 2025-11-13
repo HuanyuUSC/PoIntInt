@@ -275,8 +275,12 @@ namespace PoIntInt {
 IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   const std::vector<Geometry>& geometries,
   const KGrid& kgrid,
-  int blockSize)
+  int blockSize,
+  bool enable_profiling)
 {
+  // Start total timing
+  auto t_start_total = std::chrono::high_resolution_clock::now();
+  
   IntersectionVolumeMatrixResult result;
   int num_objects = (int)geometries.size();
   
@@ -356,52 +360,62 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     } \
   } while(0)
   
-  // Allocate and copy geometry data
+  auto t_malloc_start = std::chrono::high_resolution_clock::now();
+  
+  // Allocate device memory
   if (!all_tris.empty()) {
     CUDA_CHECK(cudaMalloc(&d_tris, all_tris.size() * sizeof(TriPacked)));
-    CUDA_CHECK(cudaMemcpy(d_tris, all_tris.data(), all_tris.size() * sizeof(TriPacked), cudaMemcpyHostToDevice));
   } else {
     CUDA_CHECK(cudaMalloc(&d_tris, sizeof(TriPacked)));  // At least 1 element
   }
   
   if (!all_disks.empty()) {
     CUDA_CHECK(cudaMalloc(&d_disks, all_disks.size() * sizeof(DiskPacked)));
-    CUDA_CHECK(cudaMemcpy(d_disks, all_disks.data(), all_disks.size() * sizeof(DiskPacked), cudaMemcpyHostToDevice));
   } else {
     CUDA_CHECK(cudaMalloc(&d_disks, sizeof(DiskPacked)));  // At least 1 element
   }
   
   CUDA_CHECK(cudaMalloc(&d_tri_counts, num_objects * sizeof(int)));
-  CUDA_CHECK(cudaMemcpy(d_tri_counts, tri_counts.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
-  
   CUDA_CHECK(cudaMalloc(&d_disk_counts, num_objects * sizeof(int)));
-  CUDA_CHECK(cudaMemcpy(d_disk_counts, disk_counts.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
-  
   CUDA_CHECK(cudaMalloc(&d_geom_types, num_objects * sizeof(int)));
-  CUDA_CHECK(cudaMemcpy(d_geom_types, geom_types.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
-  
   CUDA_CHECK(cudaMalloc(&d_tri_offsets, num_objects * sizeof(int)));
-  CUDA_CHECK(cudaMemcpy(d_tri_offsets, tri_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
-  
   CUDA_CHECK(cudaMalloc(&d_disk_offsets, num_objects * sizeof(int)));
-  CUDA_CHECK(cudaMemcpy(d_disk_offsets, disk_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
   
-  // Allocate and copy k-grid data
+  // Allocate k-grid data
   std::vector<float3> h_kdirs(Q);
   for (int q = 0; q < Q; ++q) {
     h_kdirs[q] = make_float3(kgrid.dirs[q][0], kgrid.dirs[q][1], kgrid.dirs[q][2]);
   }
   CUDA_CHECK(cudaMalloc(&d_kdirs, Q * sizeof(float3)));
-  CUDA_CHECK(cudaMemcpy(d_kdirs, h_kdirs.data(), Q * sizeof(float3), cudaMemcpyHostToDevice));
-  
   CUDA_CHECK(cudaMalloc(&d_kmags, Q * sizeof(float)));
-  CUDA_CHECK(cudaMemcpy(d_kmags, kgrid.kmag.data(), Q * sizeof(float), cudaMemcpyHostToDevice));
-  
   CUDA_CHECK(cudaMalloc(&d_weights, Q * sizeof(double)));
-  CUDA_CHECK(cudaMemcpy(d_weights, kgrid.w.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
   
   // Allocate J matrix (Q × num_objects complex numbers)
   CUDA_CHECK(cudaMalloc(&d_J, Q * num_objects * sizeof(float2)));
+  
+  auto t_malloc_end = std::chrono::high_resolution_clock::now();
+  auto t_memcpy_start = std::chrono::high_resolution_clock::now();
+  
+  // Copy geometry data
+  if (!all_tris.empty()) {
+    CUDA_CHECK(cudaMemcpy(d_tris, all_tris.data(), all_tris.size() * sizeof(TriPacked), cudaMemcpyHostToDevice));
+  }
+  if (!all_disks.empty()) {
+    CUDA_CHECK(cudaMemcpy(d_disks, all_disks.data(), all_disks.size() * sizeof(DiskPacked), cudaMemcpyHostToDevice));
+  }
+  CUDA_CHECK(cudaMemcpy(d_tri_counts, tri_counts.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_disk_counts, disk_counts.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_geom_types, geom_types.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_tri_offsets, tri_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_disk_offsets, disk_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
+  
+  // Copy k-grid data
+  CUDA_CHECK(cudaMemcpy(d_kdirs, h_kdirs.data(), Q * sizeof(float3), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_kmags, kgrid.kmag.data(), Q * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_weights, kgrid.w.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
+  
+  auto t_memcpy_end = std::chrono::high_resolution_clock::now();
+  auto t_kernel1_start = std::chrono::high_resolution_clock::now();
   
   // Phase 1: Compute form factor matrix J
   dim3 grid_J(Q, num_objects);
@@ -412,6 +426,9 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     d_kdirs, d_kmags, Q, d_J
   );
   CUDA_CHECK(cudaDeviceSynchronize());
+  
+  auto t_kernel1_end = std::chrono::high_resolution_clock::now();
+  auto t_kernel2_start = std::chrono::high_resolution_clock::now();
   
   // Phase 2: Compute volume matrix V = J^T D J
   CUDA_CHECK(cudaMalloc(&d_V, num_objects * num_objects * sizeof(double)));
@@ -425,12 +442,62 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   );
   CUDA_CHECK(cudaDeviceSynchronize());
   
+  auto t_kernel2_end = std::chrono::high_resolution_clock::now();
+  auto t_result_start = std::chrono::high_resolution_clock::now();
+  
   // Copy result back
   std::vector<double> h_V(num_objects * num_objects);
   CUDA_CHECK(cudaMemcpy(h_V.data(), d_V, num_objects * num_objects * sizeof(double), cudaMemcpyDeviceToHost));
   
+  auto t_result_end = std::chrono::high_resolution_clock::now();
+  
   // Convert to Eigen matrix
   result.volume_matrix = Eigen::Map<Eigen::MatrixXd>(h_V.data(), num_objects, num_objects);
+  
+  // End total timing
+  auto t_end_total = std::chrono::high_resolution_clock::now();
+  
+  // Calculate timing statistics
+  auto malloc_time = std::chrono::duration_cast<std::chrono::microseconds>(t_malloc_end - t_malloc_start).count() / 1000.0;
+  auto memcpy_time = std::chrono::duration_cast<std::chrono::microseconds>(t_memcpy_end - t_memcpy_start).count() / 1000.0;
+  auto kernel1_time = std::chrono::duration_cast<std::chrono::microseconds>(t_kernel1_end - t_kernel1_start).count() / 1000.0;
+  auto kernel2_time = std::chrono::duration_cast<std::chrono::microseconds>(t_kernel2_end - t_kernel2_start).count() / 1000.0;
+  auto result_time = std::chrono::duration_cast<std::chrono::microseconds>(t_result_end - t_result_start).count() / 1000.0;
+  auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end_total - t_start_total).count() / 1000.0;
+  
+  // Print timing information if profiling is enabled
+  if (enable_profiling) {
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "\n=== CUDA Multi-Object Volume Computation Profiler ===" << std::endl;
+    std::cout << "Number of objects: " << num_objects << std::endl;
+    std::cout << "K-grid nodes: " << Q << std::endl;
+    std::cout << "Block size: " << blockSize << std::endl;
+    
+    // Count geometry types
+    int num_meshes = 0, num_pointclouds = 0;
+    int total_tris = 0, total_disks = 0;
+    for (const auto& geom : geometries) {
+      if (geom.type == GEOM_TRIANGLE) {
+        num_meshes++;
+        total_tris += (int)geom.tris.size();
+      } else if (geom.type == GEOM_DISK) {
+        num_pointclouds++;
+        total_disks += (int)geom.disks.size();
+      }
+    }
+    std::cout << "Geometry types: " << num_meshes << " meshes, " << num_pointclouds << " point clouds" << std::endl;
+    if (total_tris > 0) std::cout << "Total triangles: " << total_tris << std::endl;
+    if (total_disks > 0) std::cout << "Total disks: " << total_disks << std::endl;
+    
+    std::cout << "--- Timing (ms) ---" << std::endl;
+    std::cout << "  Memory allocation: " << std::setw(8) << malloc_time << " ms" << std::endl;
+    std::cout << "  Memory copy (H->D): " << std::setw(8) << memcpy_time << " ms" << std::endl;
+    std::cout << "  Kernel 1 (Form Factor J): " << std::setw(8) << kernel1_time << " ms" << std::endl;
+    std::cout << "  Kernel 2 (Volume Matrix): " << std::setw(8) << kernel2_time << " ms" << std::endl;
+    std::cout << "  Memory copy (D->H): " << std::setw(8) << result_time << " ms" << std::endl;
+    std::cout << "  Total time:         " << std::setw(8) << total_time << " ms" << std::endl;
+    std::cout << "==========================================\n" << std::endl;
+  }
   
   // Cleanup
   cudaFree(d_tris);

@@ -309,7 +309,8 @@ static double compute_intersection_volume_cuda_impl(
   const std::vector<DiskPacked>& disks2,
   GeometryType type2,
   const KGrid& KG,
-  int blockSize)
+  int blockSize,
+  bool enable_profiling)
 {
   // Start total timing
   auto t_start_total = std::chrono::high_resolution_clock::now();
@@ -431,28 +432,30 @@ static double compute_intersection_volume_cuda_impl(
   auto result_time = std::chrono::duration_cast<std::chrono::microseconds>(t_result_end - t_result_start).count() / 1000.0;
   auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end_total - t_start_total).count() / 1000.0;
   
-  // Print timing information
-  std::cout << std::fixed << std::setprecision(3);
-  std::cout << "\n=== CUDA Volume Computation Profiler ===" << std::endl;
-  if (type1 == GEOM_TRIANGLE) {
-    std::cout << "Geometry 1: Triangle mesh (" << NF1 << " faces)" << std::endl;
-  } else {
-    std::cout << "Geometry 1: Point cloud (" << ND1 << " disks)" << std::endl;
+  // Print timing information if profiling is enabled
+  if (enable_profiling) {
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "\n=== CUDA Volume Computation Profiler ===" << std::endl;
+    if (type1 == GEOM_TRIANGLE) {
+      std::cout << "Geometry 1: Triangle mesh (" << NF1 << " faces)" << std::endl;
+    } else {
+      std::cout << "Geometry 1: Point cloud (" << ND1 << " disks)" << std::endl;
+    }
+    if (type2 == GEOM_TRIANGLE) {
+      std::cout << "Geometry 2: Triangle mesh (" << NF2 << " faces)" << std::endl;
+    } else {
+      std::cout << "Geometry 2: Point cloud (" << ND2 << " disks)" << std::endl;
+    }
+    std::cout << "K-grid nodes: " << Q << std::endl;
+    std::cout << "Block size: " << blockSize << std::endl;
+    std::cout << "--- Timing (ms) ---" << std::endl;
+    std::cout << "  Memory allocation: " << std::setw(8) << malloc_time << " ms" << std::endl;
+    std::cout << "  Memory copy (H->D): " << std::setw(8) << memcpy_time << " ms" << std::endl;
+    std::cout << "  Kernel execution:   " << std::setw(8) << kernel_time << " ms" << std::endl;
+    std::cout << "  Memory copy (D->H): " << std::setw(8) << result_time << " ms" << std::endl;
+    std::cout << "  Total time:         " << std::setw(8) << total_time << " ms" << std::endl;
+    std::cout << "==========================================\n" << std::endl;
   }
-  if (type2 == GEOM_TRIANGLE) {
-    std::cout << "Geometry 2: Triangle mesh (" << NF2 << " faces)" << std::endl;
-  } else {
-    std::cout << "Geometry 2: Point cloud (" << ND2 << " disks)" << std::endl;
-  }
-  std::cout << "K-grid nodes: " << Q << std::endl;
-  std::cout << "Block size: " << blockSize << std::endl;
-  std::cout << "--- Timing (ms) ---" << std::endl;
-  std::cout << "  Memory allocation: " << std::setw(8) << malloc_time << " ms" << std::endl;
-  std::cout << "  Memory copy (H->D): " << std::setw(8) << memcpy_time << " ms" << std::endl;
-  std::cout << "  Kernel execution:   " << std::setw(8) << kernel_time << " ms" << std::endl;
-  std::cout << "  Memory copy (D->H): " << std::setw(8) << result_time << " ms" << std::endl;
-  std::cout << "  Total time:         " << std::setw(8) << total_time << " ms" << std::endl;
-  std::cout << "==========================================\n" << std::endl;
 
   // V = I/(8π^3)
   return I / (8.0 * CUDART_PI * CUDART_PI * CUDART_PI);
@@ -463,12 +466,13 @@ double compute_intersection_volume_cuda(
   const Geometry& geom1,
   const Geometry& geom2,
   const KGrid& KG,
-  int blockSize)
+  int blockSize,
+  bool enable_profiling)
 {
   return compute_intersection_volume_cuda_impl(
     geom1.tris, geom1.disks, geom1.type,
     geom2.tris, geom2.disks, geom2.type,
-    KG, blockSize);
+    KG, blockSize, enable_profiling);
 }
 
 } // namespace PoIntInt

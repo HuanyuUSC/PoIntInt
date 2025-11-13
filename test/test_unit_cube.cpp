@@ -292,7 +292,7 @@ bool test_mesh_volume_computation(const std::string& leb_file, int Nrad = 96) {
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
   
   // Compute volume using CUDA
-  double volume_computed = compute_intersection_volume_cuda(geom, geom, KG, 256);
+  double volume_computed = compute_intersection_volume_cuda(geom, geom, KG, 256, true);
   double volume_exact = 1.0;  // Unit cube volume
   
   double rel_error = std::abs(volume_computed - volume_exact) / volume_exact;

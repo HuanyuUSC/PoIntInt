@@ -20,7 +20,8 @@ struct IntersectionVolumeMatrixResult {
 IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   const std::vector<Geometry>& geometries,
   const KGrid& kgrid,
-  int blockSize = 256
+  int blockSize = 256,
+  bool enable_profiling = false
 );
 
 } // namespace PoIntInt

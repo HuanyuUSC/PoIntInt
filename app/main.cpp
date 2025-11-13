@@ -95,7 +95,7 @@ int main(int argc, char** argv) {
 
   // For self-intersection, pass the same mesh twice
   auto t_start = std::chrono::high_resolution_clock::now();
-  double Vself = compute_intersection_volume_cuda(geom1, geom1, KG, 256);
+  double Vself = compute_intersection_volume_cuda(geom1, geom1, KG, 256, true);
   auto t_end = std::chrono::high_resolution_clock::now();
   auto compute_volume_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count() / 1000.0;
   double Vgt = volume(V, F);
