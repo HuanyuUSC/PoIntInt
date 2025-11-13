@@ -159,6 +159,16 @@ if(BUILD_TESTS)
       FOLDER "test"
     )
   endif()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sphere_pointcloud.cpp")
+    add_executable(poIntInt_test_sphere test/test_sphere_pointcloud.cpp)
+    target_link_libraries(poIntInt_test_sphere PRIVATE poIntInt_core)
+    set_target_properties(poIntInt_test_sphere PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+      FOLDER "test"
+    )
+  endif()
 endif()
 
 # ---- Status Output ----

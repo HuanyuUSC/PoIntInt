@@ -6,8 +6,11 @@
 #include <array>
 #include <cassert>
 #include "compute_volume.hpp"
+#include "geometry_packing.hpp"
 #include "lebedev_io.hpp"
 #include "gauss_legendre.hpp"
+
+using namespace PoIntInt;
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -118,14 +121,14 @@ std::pair<double, double> compute_scalar_Ak_from_mesh(const std::vector<TriPacke
       // Use derivative: E'(z) = (z cos z - sin z + i(z sin z - (1-cos z))) / z²
       auto Ep = E_prime(0.5 * (alpha + beta));
       // 2i * (Ep.re + i Ep.im) = 2i*Ep.re - 2*Ep.im
-      phi = { -2.0 * Ep.second, 2.0f * Ep.first };
+      phi = { 2.0 * Ep.second, -2.0f * Ep.first };
     } else {
       auto Ea = E_func(alpha);
       auto Eb = E_func(beta);
       double num_re = Eb.first - Ea.first;
       double num_im = Eb.second - Ea.second;
       // 2i * (num_re + i*num_im) / d = (-2*num_im, 2*num_re) / d
-      phi = {-2.0 * num_im / d, 2.0 * num_re / d};
+      phi = {2.0 * num_im / d, -2.0 * num_re / d};
     }
     
     // Phase: k · a
