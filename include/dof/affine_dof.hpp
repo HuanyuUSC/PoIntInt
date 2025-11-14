@@ -17,6 +17,10 @@ struct AffineDoF : public DoFParameterization {
   
   // Apply affine transformation: x -> A*x + t
   Geometry apply(const Geometry& geom, const Eigen::VectorXd& dofs) const override;
+
+  std::complex<double>
+    compute_A(const Geometry& geom, const Eigen::Vector3d& k,
+      const Eigen::VectorXd& dofs) const override;
   
   // Compute gradient of form factor A(k) w.r.t. DoFs
   Eigen::VectorXcd 

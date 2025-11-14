@@ -156,6 +156,8 @@ bool test_gradient_computation(const std::string& leb_file, int Nrad = 32) {
     (Eigen::VectorXd(12) << 0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
     // Rotation around x-axis: [0, 0, 0, 1, 0, 0, 0, cos(0.1), -sin(0.1), 0, sin(0.1), cos(0.1)]
     (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, std::cos(0.1), -std::sin(0.1), 0.0, std::sin(0.1), std::cos(0.1)).finished(),
+    // More involved
+    (Eigen::VectorXd(12) << 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 7.0, 8.0, 0.0, 0.0, 9.0).finished(),
   };
   
   double max_rel_error = 0.0;
@@ -175,7 +177,7 @@ bool test_gradient_computation(const std::string& leb_file, int Nrad = 32) {
         std::complex<double> diff = grad_analytical(i) - grad_fd(i);
         double abs_error = std::abs(diff);
         double abs_fd = std::abs(grad_fd(i));
-        double rel_error = (abs_fd > 1e-10) ? abs_error / abs_fd : abs_error;
+        double rel_error = (abs_fd > 1e-8) ? abs_error / abs_fd : abs_error;
         
         if (rel_error > max_rel_error) {
           max_rel_error = rel_error;

@@ -1,4 +1,5 @@
 #include "dof/affine_dof.hpp"
+#include "element_functions.hpp"
 #include "form_factor_helpers.hpp"
 #include "geometry/packing.hpp"
 #include <cuda_runtime.h>
@@ -29,16 +30,9 @@ Geometry AffineDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) con
   if (geom.type == GEOM_TRIANGLE) {
     // Transform triangles: vertices -> A*vertex + t
     for (auto& tri : transformed.tris) {
-      Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
-      Eigen::Vector3d b = a + Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z);
-      Eigen::Vector3d c = a + Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z);
-      
-      a = A * a + t;
-      b = A * b + t;
-      c = A * c + t;
-      
-      Eigen::Vector3d e1 = b - a;
-      Eigen::Vector3d e2 = c - a;
+      Eigen::Vector3d a = A * Eigen::Vector3d(tri.a.x, tri.a.y, tri.a.z) + t;
+      Eigen::Vector3d e1 = A * Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z);
+      Eigen::Vector3d e2 = A * Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z);
       Eigen::Vector3d S = 0.5 * e1.cross(e2);
       
       tri.a = make_float3((float)a.x(), (float)a.y(), (float)a.z());
@@ -87,32 +81,152 @@ Geometry AffineDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) con
   return transformed;
 }
 
+std::complex<double> AffineDoF::compute_A(
+  const Geometry& geom,
+  const Eigen::Vector3d& k,
+  const Eigen::VectorXd& dofs) const
+{
+  auto [A, t] = build_affine_transform(dofs);
+
+  std::complex<double> Ak(0.0, 0.0);
+
+  double kmag = k.norm();
+  if (kmag < 1e-10) return Ak; // A(0) = 0
+
+  const Eigen::Vector3d khat = k / kmag;
+
+  if (geom.type == GEOM_TRIANGLE) {
+    // For each triangle, compute gradient contribution
+    for (const auto& tri : geom.tris) {
+      Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
+      Eigen::Vector3d e1(tri.e1.x, tri.e1.y, tri.e1.z);
+      Eigen::Vector3d e2(tri.e2.x, tri.e2.y, tri.e2.z);
+      Eigen::Vector3d S(tri.S.x, tri.S.y, tri.S.z);
+
+      // Transformed quantities
+      Eigen::Vector3d a_prime = A * a + t;
+      Eigen::Vector3d e1_prime = A * e1;
+      Eigen::Vector3d e2_prime = A * e2;
+      Eigen::Vector3d S_prime = 0.5 * e1_prime.cross(e2_prime);
+
+      // the imaginary unit
+      static const std::complex<double> I(0.0, 1.0);
+
+      // Compute A(k) for transformed triangle
+      double alpha_prime = k.dot(e1_prime);
+      double beta_prime = k.dot(e2_prime);
+      double gamma_prime = khat.dot(S_prime);
+
+      std::complex<double> phi_prime = Triangle_Phi_ab(alpha_prime, beta_prime);
+      std::complex<double> phase_prime = std::exp(I * k.dot(a_prime));
+      Ak += phase_prime * phi_prime * gamma_prime;
+    }
+  }
+  else if (geom.type == GEOM_DISK) {
+    // For disks, use standard implementation
+    Ak = DoFParameterization::compute_A(geom, k, dofs);
+  }
+  else if (geom.type == GEOM_GAUSSIAN) {
+    // For Gaussian splats, use standard implementation
+    Ak = DoFParameterization::compute_A(geom, k, dofs);
+  }
+
+  return Ak;
+}
+
 Eigen::VectorXcd AffineDoF::compute_A_gradient(
   const Geometry& geom,
   const Eigen::Vector3d& k,
   const Eigen::VectorXd& dofs) const
 {
-  // Compute gradient using finite differencing by directly transforming geometry
-  // Use central differences for better accuracy
-  Eigen::VectorXcd grad(12);
-  double eps = 1e-6;
+  auto [A, t] = build_affine_transform(dofs);
+
+  Eigen::VectorXcd grad = Eigen::VectorXcd::Zero(12);
+
+  double kmag = k.norm();
+  if (kmag < 1e-10) return grad; // gradient = 0 at k=0
+
+  const Eigen::Vector3d khat = k / kmag;
   
-  for (int i = 0; i < 12; ++i) {
-    // Forward difference
-    Eigen::VectorXd dofs_plus = dofs;
-    dofs_plus(i) += eps;
-    Geometry geom_plus = apply(geom, dofs_plus);
-    std::complex<double> A_plus = compute_A_geometry(geom_plus, k);
-    
-    // Backward difference
-    Eigen::VectorXd dofs_minus = dofs;
-    dofs_minus(i) -= eps;
-    Geometry geom_minus = apply(geom, dofs_minus);
-    std::complex<double> A_minus = compute_A_geometry(geom_minus, k);
-    
-    // Central difference: (f(x+h) - f(x-h)) / (2h)
-    grad(i) = (A_plus - A_minus) / (2.0 * eps);
-  }
+  if (geom.type == GEOM_TRIANGLE) {
+    // For each triangle, compute gradient contribution
+    for (const auto& tri : geom.tris) {
+      Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
+      Eigen::Vector3d e1(tri.e1.x, tri.e1.y, tri.e1.z);
+      Eigen::Vector3d e2(tri.e2.x, tri.e2.y, tri.e2.z);
+      Eigen::Vector3d S(tri.S.x, tri.S.y, tri.S.z);
+      
+      // Transformed quantities
+      Eigen::Vector3d a_prime = A * a + t;
+      Eigen::Vector3d e1_prime = A * e1;
+      Eigen::Vector3d e2_prime = A * e2;
+      Eigen::Vector3d S_prime = 0.5 * e1_prime.cross(e2_prime);
+
+      // the imaginary unit
+      static const std::complex<double> I(0.0, 1.0);
+      
+      // Compute A(k) for transformed triangle
+      double alpha_prime = k.dot(e1_prime);
+      double beta_prime = k.dot(e2_prime);
+      double gamma_prime = khat.dot(S_prime);
+      
+      std::complex<double> phi_prime = Triangle_Phi_ab(alpha_prime, beta_prime);
+      std::complex<double> phase_prime = std::exp(I * k.dot(a_prime));
+      std::complex<double> A_tri = phase_prime * phi_prime * gamma_prime;
+      
+      // Compute gradients of Phi w.r.t. alpha and beta
+      auto [dPhi_dalpha, dPhi_dbeta] = Triangle_Phi_ab_gradient(alpha_prime, beta_prime);
+      
+      // Gradient w.r.t. translation t (DoFs 0-2)
+      // dA/dt = i*k * A (since phase = exp(i*k·(A*a+t)), and t only affects phase)
+      grad.head(3) += I * A_tri * k;
+
+      Eigen::Matrix3cd gA = A_tri * I * k * a.transpose();
+      gA += gamma_prime * phase_prime * k * (dPhi_dalpha * e1 + dPhi_dbeta * e2).transpose();
+
+      auto cross_product_matrix = [](const Eigen::Vector3d& v) {
+        Eigen::Matrix3d cp;
+        cp << 0, -v.z(), v.y(),
+          v.z(), 0, -v.x(),
+          -v.y(), v.x(), 0;
+        return cp;
+        };
+      
+      gA -= cross_product_matrix(khat) * A * cross_product_matrix(S) * phase_prime * phi_prime;
+      Eigen::Map<Eigen::Matrix3cd>(grad.data() + 3) += gA.transpose();
+    }
+  } else if (geom.type == GEOM_DISK) {
+    // For disks, use finite differencing (analytical formula is more complex)
+    double eps = 1e-6;
+    for (int i = 0; i < 12; ++i) {
+      Eigen::VectorXd dofs_plus = dofs;
+      dofs_plus(i) += eps;
+      Geometry geom_plus = apply(geom, dofs_plus);
+      std::complex<double> A_plus = compute_A_geometry(geom_plus, k);
+      
+      Eigen::VectorXd dofs_minus = dofs;
+      dofs_minus(i) -= eps;
+      Geometry geom_minus = apply(geom, dofs_minus);
+      std::complex<double> A_minus = compute_A_geometry(geom_minus, k);
+      
+      grad(i) = (A_plus - A_minus) / (2.0 * eps);
+    }
+  } else if (geom.type == GEOM_GAUSSIAN) {
+    // For Gaussian splats, use finite differencing
+    double eps = 1e-6;
+    for (int i = 0; i < 12; ++i) {
+      Eigen::VectorXd dofs_plus = dofs;
+      dofs_plus(i) += eps;
+      Geometry geom_plus = apply(geom, dofs_plus);
+      std::complex<double> A_plus = compute_A_geometry(geom_plus, k);
+      
+      Eigen::VectorXd dofs_minus = dofs;
+      dofs_minus(i) -= eps;
+      Geometry geom_minus = apply(geom, dofs_minus);
+      std::complex<double> A_minus = compute_A_geometry(geom_minus, k);
+      
+      grad(i) = (A_plus - A_minus) / (2.0 * eps);
+    }
   }
   
   return grad;
