@@ -23,6 +23,10 @@ struct AffineDoF : public DoFParameterization {
     compute_A_gradient(const Geometry& geom, const Eigen::Vector3d& k,
                       const Eigen::VectorXd& dofs) const override;
   
+  // Compute gradient of volume w.r.t. DoFs
+  Eigen::VectorXd
+    compute_volume_gradient(const Geometry& geom, const Eigen::VectorXd& dofs) const override;
+  
 private:
   // Helper: Build affine transformation matrix from DoFs
   // Returns (A, t) where A is 3x3 matrix and t is translation

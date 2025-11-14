@@ -113,6 +113,70 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
     // Central difference: (f(x+h) - f(x-h)) / (2h)
     grad(i) = (A_plus - A_minus) / (2.0 * eps);
   }
+  }
+  
+  return grad;
+}
+
+Eigen::VectorXd AffineDoF::compute_volume_gradient(
+  const Geometry& geom,
+  const Eigen::VectorXd& dofs) const
+{
+  auto [A, t] = build_affine_transform(dofs);
+  double det_A = A.determinant();
+  double sign_det_A = (det_A >= 0.0) ? 1.0 : -1.0;
+  
+  // Compute base volume (volume of original geometry)
+  // For triangle meshes: V = (1/3) * Σ_triangles (a · S)
+  double V_base = 0.0;
+  if (geom.type == GEOM_TRIANGLE) {
+    for (const auto& tri : geom.tris) {
+      Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
+      Eigen::Vector3d S(tri.S.x, tri.S.y, tri.S.z);
+      V_base += a.dot(S);
+    }
+    V_base /= 3.0;
+  } else if (geom.type == GEOM_DISK) {
+    for (const auto& disk : geom.disks) {
+      Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
+      Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
+      V_base += c.dot(n) * disk.area;
+    }
+    V_base /= 3.0;
+  } else if (geom.type == GEOM_GAUSSIAN) {
+    for (const auto& gauss : geom.gaussians) {
+      Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
+      Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
+      V_base += c.dot(n) * gauss.w;
+    }
+    V_base /= 3.0;
+  }
+  
+  Eigen::VectorXd grad = Eigen::VectorXd::Zero(12);
+  
+  // Gradient w.r.t. translation t (DoFs 0-2) = 0  
+  // Gradient w.r.t. matrix A (DoFs 3-11)
+  // V' = |det(A)| * V_base
+  // dV'/dA_ij = sign(det(A)) * cof(A) * V_base
+  
+  // Compute cofactor matrix
+  Eigen::Matrix3d cofactor_A;
+  cofactor_A(0, 0) = A(1, 1) * A(2, 2) - A(1, 2) * A(2, 1);
+  cofactor_A(0, 1) = A(1, 2) * A(2, 0) - A(1, 0) * A(2, 2);
+  cofactor_A(0, 2) = A(1, 0) * A(2, 1) - A(1, 1) * A(2, 0);
+  cofactor_A(1, 0) = A(2, 1) * A(0, 2) - A(2, 2) * A(0, 1);
+  cofactor_A(1, 1) = A(2, 2) * A(0, 0) - A(2, 0) * A(0, 2);
+  cofactor_A(1, 2) = A(2, 0) * A(0, 1) - A(2, 1) * A(0, 0);
+  cofactor_A(2, 0) = A(0, 1) * A(1, 2) - A(0, 2) * A(1, 1);
+  cofactor_A(2, 1) = A(0, 2) * A(1, 0) - A(0, 0) * A(1, 2);
+  cofactor_A(2, 2) = A(0, 0) * A(1, 1) - A(0, 1) * A(1, 0);
+  
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col) {
+      int dof_idx = 3 + row * 3 + col;
+      grad(dof_idx) = sign_det_A * cofactor_A(row, col) * V_base;
+    }
+  }
   
   return grad;
 }
