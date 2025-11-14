@@ -150,9 +150,9 @@ endif()
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_unit_cube.cpp")
-    add_executable(poIntInt_test test/test_unit_cube.cpp)
-    target_link_libraries(poIntInt_test PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test PROPERTIES
+    add_executable(poIntInt_test_triangle_mesh test/test_unit_cube.cpp)
+    target_link_libraries(poIntInt_test_triangle_mesh PRIVATE poIntInt_core)
+    set_target_properties(poIntInt_test_triangle_mesh PROPERTIES
       CUDA_SEPARABLE_COMPILATION ON
       CUDA_RESOLVE_DEVICE_SYMBOLS ON
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
@@ -160,19 +160,9 @@ if(BUILD_TESTS)
     )
   endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sphere_pointcloud.cpp")
-    add_executable(poIntInt_test_sphere test/test_sphere_pointcloud.cpp)
-    target_link_libraries(poIntInt_test_sphere PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_sphere PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_multi_object.cpp")
-    add_executable(poIntInt_test_multi test/test_multi_object.cpp)
-    target_link_libraries(poIntInt_test_multi PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_multi PROPERTIES
+    add_executable(poIntInt_test_point_cloud test/test_sphere_pointcloud.cpp)
+    target_link_libraries(poIntInt_test_point_cloud PRIVATE poIntInt_core)
+    set_target_properties(poIntInt_test_point_cloud PROPERTIES
       CUDA_SEPARABLE_COMPILATION ON
       CUDA_RESOLVE_DEVICE_SYMBOLS ON
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
@@ -180,15 +170,25 @@ if(BUILD_TESTS)
     )
   endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_gaussian_splats.cpp")
-    add_executable(poIntInt_test_gaussian test/test_gaussian_splats.cpp)
-    target_link_libraries(poIntInt_test_gaussian PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_gaussian PROPERTIES
+    add_executable(poIntInt_test_gaussian_splat test/test_gaussian_splats.cpp)
+    target_link_libraries(poIntInt_test_gaussian_splat PRIVATE poIntInt_core)
+    set_target_properties(poIntInt_test_gaussian_splat PROPERTIES
       CUDA_SEPARABLE_COMPILATION ON
       CUDA_RESOLVE_DEVICE_SYMBOLS ON
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "test"
     )
   endif()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_multi_object.cpp")
+    add_executable(poIntInt_test_multi_object test/test_multi_object.cpp)
+    target_link_libraries(poIntInt_test_multi_object PRIVATE poIntInt_core)
+    set_target_properties(poIntInt_test_multi_object PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+      FOLDER "test"
+    )
+  endif()  
 endif()
 
 # ---- Status Output ----
