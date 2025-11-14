@@ -5,7 +5,7 @@
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/gauss_legendre.hpp"
 #include "quadrature/kgrid.hpp"
-#include "compute_volume.hpp"
+#include "compute_intersection_volume.hpp"
 #include "geometry/packing.hpp"
 #include <cmath>
 #include <corecrt_math_defines.h>

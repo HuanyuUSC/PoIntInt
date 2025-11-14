@@ -7,7 +7,7 @@
 #include "dof/affine_dof.hpp"
 #include "form_factor_helpers.hpp"
 #include "geometry/packing.hpp"
-#include "compute_volume.hpp"
+#include "compute_intersection_volume.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/kgrid.hpp"
 

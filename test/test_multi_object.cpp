@@ -3,7 +3,7 @@
 #include <iomanip>
 #include <cmath>
 #include <vector>
-#include "compute_volume_multi_object.hpp"
+#include "compute_intersection_volume_multi_object.hpp"
 #include "geometry/packing.hpp"
 #include "geometry/geometry_helpers.hpp"
 #include "analytical_intersection.hpp"

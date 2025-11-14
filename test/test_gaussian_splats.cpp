@@ -6,7 +6,7 @@
 #include <array>
 #include <cassert>
 #include <cuda_runtime.h>
-#include "compute_volume.hpp"
+#include "compute_intersection_volume.hpp"
 #include "geometry/packing.hpp"
 #include "geometry/geometry_helpers.hpp"
 #include "form_factor_helpers.hpp"

@@ -8,7 +8,7 @@
 #include <iostream>
 #include <iomanip>
 #include <math_constants.h>
-#include "compute_volume.hpp"
+#include "compute_intersection_volume.hpp"
 #include "geometry/geometry.hpp"
 #include "geometry/types.hpp"
 
