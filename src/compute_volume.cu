@@ -136,18 +136,21 @@ __device__ __forceinline__ float2 Phi_ab(float alpha, float beta){
 
 // ===================== kernel =====================
 
-// Unified kernel supporting both triangle meshes and point clouds (disks)
-// type1/type2: 0 = triangle, 1 = disk
+// Unified kernel supporting triangle meshes, point clouds (disks), and Gaussian splats
+// type1/type2: 0 = triangle, 1 = disk, 2 = Gaussian
 using PoIntInt::TriPacked;
 using PoIntInt::DiskPacked;
+using PoIntInt::GaussianPacked;
 
 extern "C" __global__
 void accumulate_intersection_volume_kernel(
   const TriPacked* __restrict__ tris1, int NF1,
   const DiskPacked* __restrict__ disks1, int ND1,
+  const GaussianPacked* __restrict__ gaussians1, int NG1,
   int type1,
   const TriPacked* __restrict__ tris2, int NF2,
   const DiskPacked* __restrict__ disks2, int ND2,
+  const GaussianPacked* __restrict__ gaussians2, int NG2,
   int type2,
   const float3*  __restrict__ kdirs,      // Q
   const double*  __restrict__ weights_k,  // Q
@@ -163,7 +166,7 @@ void accumulate_intersection_volume_kernel(
   float  kx = k*u.x, ky = k*u.y, kz = k*u.z;
 
   // Accumulate A1_parallel(k) for geometry 1
-  // type1: 0 = GEOM_TRIANGLE, 1 = GEOM_DISK
+  // type1: 0 = GEOM_TRIANGLE, 1 = GEOM_DISK, 2 = GEOM_GAUSSIAN
   float2 A1; A1.x = A1.y = 0.0f;
 
   if (type1 == 0) {  // GEOM_TRIANGLE
@@ -211,10 +214,34 @@ void accumulate_intersection_volume_kernel(
         }
       }
     }
+  } else if (type1 == 2) {  // GEOM_GAUSSIAN
+    if (NG1 > 0) {
+      for (int i = threadIdx.x; i < NG1; i += blockDim.x) {
+        GaussianPacked g = gaussians1[i];
+        if (g.sigma > 0.0f && g.w >= 0.0f) {
+          float kpar_coeff = fmaf(u.x, g.n.x, fmaf(u.y, g.n.y, u.z * g.n.z));
+          float kdotn = k * kpar_coeff;
+          float r2 = fmaxf(k * k - kdotn * kdotn, 0.0f);  // ||k_perp||^2
+          
+          float phase = fmaf(kx, g.c.x, fmaf(ky, g.c.y, kz * g.c.z));
+          float2 eikc = cexp_i(phase);
+          
+          // S_gauss(k) = w * exp(-0.5 * sigma^2 * ||k_perp||^2)
+          float exp_arg = -0.5f * g.sigma * g.sigma * r2;
+          float Smag = g.w * expf(exp_arg);
+          
+          float Apar = kpar_coeff * Smag;
+          if (!isfinite(Apar)) Apar = 0.0f;
+          
+          A1.x += eikc.x * Apar;
+          A1.y += eikc.y * Apar;
+        }
+      }
+    }
   }
 
   // Accumulate A2_parallel(k) for geometry 2
-  // type2: 0 = GEOM_TRIANGLE, 1 = GEOM_DISK
+  // type2: 0 = GEOM_TRIANGLE, 1 = GEOM_DISK, 2 = GEOM_GAUSSIAN
   float2 A2; A2.x = A2.y = 0.0f;
 
   if (type2 == 0) {  // GEOM_TRIANGLE
@@ -262,6 +289,30 @@ void accumulate_intersection_volume_kernel(
         }
       }
     }
+  } else if (type2 == 2) {  // GEOM_GAUSSIAN
+    if (NG2 > 0) {
+      for (int i = threadIdx.x; i < NG2; i += blockDim.x) {
+        GaussianPacked g = gaussians2[i];
+        if (g.sigma > 0.0f && g.w >= 0.0f) {
+          float kpar_coeff = fmaf(u.x, g.n.x, fmaf(u.y, g.n.y, u.z * g.n.z));
+          float kdotn = k * kpar_coeff;
+          float r2 = fmaxf(k * k - kdotn * kdotn, 0.0f);  // ||k_perp||^2
+          
+          float phase = fmaf(kx, g.c.x, fmaf(ky, g.c.y, kz * g.c.z));
+          float2 eikc = cexp_i(phase);
+          
+          // S_gauss(k) = w * exp(-0.5 * sigma^2 * ||k_perp||^2)
+          float exp_arg = -0.5f * g.sigma * g.sigma * r2;
+          float Smag = g.w * expf(exp_arg);
+          
+          float Apar = kpar_coeff * Smag;
+          if (!isfinite(Apar)) Apar = 0.0f;
+          
+          A2.x += eikc.x * Apar;
+          A2.y += eikc.y * Apar;
+        }
+      }
+    }
   }
 
   // Tree reduction using shared memory
@@ -304,9 +355,11 @@ namespace PoIntInt {
 static double compute_intersection_volume_cuda_impl(
   const std::vector<TriPacked>& tris1,
   const std::vector<DiskPacked>& disks1,
+  const std::vector<GaussianPacked>& gaussians1,
   GeometryType type1,
   const std::vector<TriPacked>& tris2,
   const std::vector<DiskPacked>& disks2,
+  const std::vector<GaussianPacked>& gaussians2,
   GeometryType type2,
   const KGrid& KG,
   int blockSize,
@@ -317,14 +370,18 @@ static double compute_intersection_volume_cuda_impl(
   
   int NF1 = (type1 == GEOM_TRIANGLE) ? (int)tris1.size() : 0;
   int ND1 = (type1 == GEOM_DISK) ? (int)disks1.size() : 0;
+  int NG1 = (type1 == GEOM_GAUSSIAN) ? (int)gaussians1.size() : 0;
   int NF2 = (type2 == GEOM_TRIANGLE) ? (int)tris2.size() : 0;
   int ND2 = (type2 == GEOM_DISK) ? (int)disks2.size() : 0;
+  int NG2 = (type2 == GEOM_GAUSSIAN) ? (int)gaussians2.size() : 0;
   int Q = (int)KG.kmag.size();
 
   DiskPacked* d_disks1=nullptr;
   DiskPacked* d_disks2=nullptr;
   TriPacked* d_tris1=nullptr;
   TriPacked* d_tris2=nullptr;
+  GaussianPacked* d_gaussians1=nullptr;
+  GaussianPacked* d_gaussians2=nullptr;
   float3*     d_dirs=nullptr;
   float*      d_kmag=nullptr;
   double*    d_w=nullptr;
@@ -339,6 +396,8 @@ static double compute_intersection_volume_cuda_impl(
       if (d_tris2) cudaFree(d_tris2); \
       if (d_disks1) cudaFree(d_disks1); \
       if (d_disks2) cudaFree(d_disks2); \
+      if (d_gaussians1) cudaFree(d_gaussians1); \
+      if (d_gaussians2) cudaFree(d_gaussians2); \
       if (d_dirs) cudaFree(d_dirs); \
       if (d_kmag) cudaFree(d_kmag); \
       if (d_w) cudaFree(d_w); \
@@ -349,20 +408,12 @@ static double compute_intersection_volume_cuda_impl(
 
   auto t_malloc_start = std::chrono::high_resolution_clock::now();
   // Allocate memory (always allocate at least 1 element to avoid null pointers)
-  if (type1 == GEOM_TRIANGLE) {
-    CUDA_CHECK(cudaMalloc(&d_tris1, (NF1 > 0 ? NF1 : 1) * sizeof(TriPacked)));
-    CUDA_CHECK(cudaMalloc(&d_disks1, sizeof(DiskPacked)));
-  } else {
-    CUDA_CHECK(cudaMalloc(&d_disks1, (ND1 > 0 ? ND1 : 1) * sizeof(DiskPacked)));
-    CUDA_CHECK(cudaMalloc(&d_tris1, sizeof(TriPacked)));
-  }
-  if (type2 == GEOM_TRIANGLE) {
-    CUDA_CHECK(cudaMalloc(&d_tris2, (NF2 > 0 ? NF2 : 1) * sizeof(TriPacked)));
-    CUDA_CHECK(cudaMalloc(&d_disks2, sizeof(DiskPacked)));
-  } else {
-    CUDA_CHECK(cudaMalloc(&d_disks2, (ND2 > 0 ? ND2 : 1) * sizeof(DiskPacked)));
-    CUDA_CHECK(cudaMalloc(&d_tris2, sizeof(TriPacked)));
-  }
+  CUDA_CHECK(cudaMalloc(&d_tris1, (NF1 > 0 ? NF1 : 1) * sizeof(TriPacked)));
+  CUDA_CHECK(cudaMalloc(&d_disks1, (ND1 > 0 ? ND1 : 1) * sizeof(DiskPacked)));
+  CUDA_CHECK(cudaMalloc(&d_gaussians1, (NG1 > 0 ? NG1 : 1) * sizeof(GaussianPacked)));
+  CUDA_CHECK(cudaMalloc(&d_tris2, (NF2 > 0 ? NF2 : 1) * sizeof(TriPacked)));
+  CUDA_CHECK(cudaMalloc(&d_disks2, (ND2 > 0 ? ND2 : 1) * sizeof(DiskPacked)));
+  CUDA_CHECK(cudaMalloc(&d_gaussians2, (NG2 > 0 ? NG2 : 1) * sizeof(GaussianPacked)));
   CUDA_CHECK(cudaMalloc(&d_dirs, Q *sizeof(float3)));
   CUDA_CHECK(cudaMalloc(&d_kmag, Q *sizeof(float)));
   CUDA_CHECK(cudaMalloc(&d_w,    Q *sizeof(double)));
@@ -376,11 +427,17 @@ static double compute_intersection_volume_cuda_impl(
   if (type1 == GEOM_DISK && ND1 > 0) {
     CUDA_CHECK(cudaMemcpy(d_disks1, disks1.data(), ND1 * sizeof(DiskPacked), cudaMemcpyHostToDevice));
   }
+  if (type1 == GEOM_GAUSSIAN && NG1 > 0) {
+    CUDA_CHECK(cudaMemcpy(d_gaussians1, gaussians1.data(), NG1 * sizeof(GaussianPacked), cudaMemcpyHostToDevice));
+  }
   if (type2 == GEOM_TRIANGLE && NF2 > 0) {
     CUDA_CHECK(cudaMemcpy(d_tris2, tris2.data(), NF2 * sizeof(TriPacked), cudaMemcpyHostToDevice));
   }
   if (type2 == GEOM_DISK && ND2 > 0) {
     CUDA_CHECK(cudaMemcpy(d_disks2, disks2.data(), ND2 * sizeof(DiskPacked), cudaMemcpyHostToDevice));
+  }
+  if (type2 == GEOM_GAUSSIAN && NG2 > 0) {
+    CUDA_CHECK(cudaMemcpy(d_gaussians2, gaussians2.data(), NG2 * sizeof(GaussianPacked), cudaMemcpyHostToDevice));
   }
   
   std::vector<float3> hdirs(Q);
@@ -400,8 +457,8 @@ static double compute_intersection_volume_cuda_impl(
   
   auto t_kernel_start = std::chrono::high_resolution_clock::now();
   accumulate_intersection_volume_kernel<<<grid, block, 0>>>(
-    d_tris1, NF1, d_disks1, ND1, (int)type1,
-    d_tris2, NF2, d_disks2, ND2, (int)type2,
+    d_tris1, NF1, d_disks1, ND1, d_gaussians1, NG1, (int)type1,
+    d_tris2, NF2, d_disks2, ND2, d_gaussians2, NG2, (int)type2,
     d_dirs, d_w, d_kmag, Q, d_out);
   CUDA_CHECK(cudaDeviceSynchronize());
   auto t_kernel_end = std::chrono::high_resolution_clock::now();
@@ -415,6 +472,8 @@ static double compute_intersection_volume_cuda_impl(
   cudaFree(d_tris2);
   cudaFree(d_disks1);
   cudaFree(d_disks2);
+  cudaFree(d_gaussians1);
+  cudaFree(d_gaussians2);
   cudaFree(d_dirs);
   cudaFree(d_kmag);
   cudaFree(d_w);
@@ -438,13 +497,17 @@ static double compute_intersection_volume_cuda_impl(
     std::cout << "\n=== CUDA Volume Computation Profiler ===" << std::endl;
     if (type1 == GEOM_TRIANGLE) {
       std::cout << "Geometry 1: Triangle mesh (" << NF1 << " faces)" << std::endl;
-    } else {
+    } else if (type1 == GEOM_DISK) {
       std::cout << "Geometry 1: Point cloud (" << ND1 << " disks)" << std::endl;
+    } else {
+      std::cout << "Geometry 1: Gaussian splats (" << NG1 << " gaussians)" << std::endl;
     }
     if (type2 == GEOM_TRIANGLE) {
       std::cout << "Geometry 2: Triangle mesh (" << NF2 << " faces)" << std::endl;
-    } else {
+    } else if (type2 == GEOM_DISK) {
       std::cout << "Geometry 2: Point cloud (" << ND2 << " disks)" << std::endl;
+    } else {
+      std::cout << "Geometry 2: Gaussian splats (" << NG2 << " gaussians)" << std::endl;
     }
     std::cout << "K-grid nodes: " << Q << std::endl;
     std::cout << "Block size: " << blockSize << std::endl;
@@ -470,8 +533,8 @@ double compute_intersection_volume_cuda(
   bool enable_profiling)
 {
   return compute_intersection_volume_cuda_impl(
-    geom1.tris, geom1.disks, geom1.type,
-    geom2.tris, geom2.disks, geom2.type,
+    geom1.tris, geom1.disks, geom1.gaussians, geom1.type,
+    geom2.tris, geom2.disks, geom2.gaussians, geom2.type,
     KG, blockSize, enable_profiling);
 }
 

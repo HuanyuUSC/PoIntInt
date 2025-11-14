@@ -23,10 +23,21 @@ struct DiskPacked {
   // Total: 32 bytes
 };
 
+// Gaussian splat surfel (planar Gaussian footprint)
+// Note: Struct size is 32 bytes (12+12+4+4), naturally aligned
+struct GaussianPacked {
+  float3 c;   // center (12 bytes)
+  float3 n;   // unit normal (12 bytes)
+  float sigma; // standard deviation in tangent plane (4 bytes)
+  float w;     // area weight (4 bytes)
+  // Total: 32 bytes
+};
+
 // Geometry type enum
 enum GeometryType {
   GEOM_TRIANGLE = 0,
-  GEOM_DISK = 1
+  GEOM_DISK = 1,
+  GEOM_GAUSSIAN = 2
 };
 
 struct KGrid {

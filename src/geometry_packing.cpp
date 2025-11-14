@@ -106,5 +106,42 @@ Geometry make_point_cloud(
   return geom;
 }
 
+// Pack Gaussian splats into CUDA-friendly format
+std::vector<GaussianPacked> pack_gaussians(
+  const Eigen::MatrixXd& P,
+  const Eigen::MatrixXd& N,
+  const Eigen::VectorXd& sigmas,
+  const Eigen::VectorXd& weights)
+{
+  assert(P.cols() == 3 && N.cols() == 3);
+  assert(P.rows() == N.rows() && P.rows() == sigmas.rows() && P.rows() == weights.rows());
+  
+  std::vector<GaussianPacked> G(P.rows());
+  
+  for (int i = 0; i < P.rows(); ++i) {
+    Eigen::Vector3d pos = P.row(i);
+    Eigen::Vector3d normal = N.row(i);
+    normal.normalize();  // Ensure unit normal
+    
+    G[i].c = make_float3((float)pos.x(), (float)pos.y(), (float)pos.z());
+    G[i].n = make_float3((float)normal.x(), (float)normal.y(), (float)normal.z());
+    G[i].sigma = (float)sigmas(i);
+    G[i].w = (float)weights(i);
+  }
+  return G;
+}
+
+// Factory function: create Geometry from Gaussian splats
+Geometry make_gaussian_splat(
+  const Eigen::MatrixXd& P,
+  const Eigen::MatrixXd& N,
+  const Eigen::VectorXd& sigmas,
+  const Eigen::VectorXd& weights)
+{
+  Geometry geom(GEOM_GAUSSIAN);
+  geom.gaussians = pack_gaussians(P, N, sigmas, weights);
+  return geom;
+}
+
 } // namespace PoIntInt
 

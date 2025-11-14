@@ -54,6 +54,54 @@ void create_sphere_pointcloud(
   }
 }
 
+// Helper: Create unit sphere as Gaussian splats
+void create_sphere_gaussians(
+  Eigen::MatrixXd& P,  // positions
+  Eigen::MatrixXd& N,  // normals (outward pointing)
+  Eigen::VectorXd& sigmas,  // standard deviations in tangent plane
+  Eigen::VectorXd& weights,  // area weights
+  int n_points = 1000)
+{
+  // Generate points on unit sphere surface with uniform distribution
+  // Using Fibonacci sphere algorithm for uniform distribution
+  P.resize(n_points, 3);
+  N.resize(n_points, 3);
+  sigmas.resize(n_points);
+  weights.resize(n_points);
+  
+  const double golden_angle = M_PI * (3.0 - std::sqrt(5.0));  // Golden angle in radians
+  
+  for (int i = 0; i < n_points; ++i) {
+    double y = 1.0 - (2.0 * i) / (n_points - 1.0);  // y goes from 1 to -1
+    double radius_at_y = std::sqrt(1.0 - y * y);  // radius at height y
+    double theta = golden_angle * i;
+    
+    double x = radius_at_y * std::cos(theta);
+    double z = radius_at_y * std::sin(theta);
+    
+    // Position on unit sphere
+    P(i, 0) = x;
+    P(i, 1) = y;
+    P(i, 2) = z;
+    
+    // Normal (outward pointing, same as position for unit sphere)
+    N(i, 0) = x;
+    N(i, 1) = y;
+    N(i, 2) = z;
+    
+    // Total surface area = 4π, so each Gaussian should have weight ≈ 4π/n_points
+    double weight = 4.0 * M_PI / n_points;
+    weights(i) = weight;
+    
+    // Choose sigma such that the Gaussian footprint covers approximately the same area
+    // For a Gaussian with std dev sigma, the effective radius is about 2*sigma
+    // We want the area covered to be approximately weight, so:
+    // π * (2*sigma)^2 ≈ weight, so sigma ≈ sqrt(weight/(4π))
+    double sigma = std::sqrt(weight / (4.0 * M_PI));  // Approximately sqrt(1/n_points)
+    sigmas(i) = sigma;
+  }
+}
+
 // ============================================================================
 // Analytical Ground Truth Functions
 // ============================================================================
@@ -633,6 +681,324 @@ bool test_mixed_geometry_types(const std::string& leb_file, int Nrad = 96) {
   return passed;
 }
 
+// Test: Three unit sphere Gaussian splats with different translations
+bool test_three_gaussian_splats(const std::string& leb_file, int Nrad = 96) {
+  std::cout << "\n=== Test: Three Unit Sphere Gaussian Splats ===" << std::endl;
+  
+  // Create 3 unit sphere Gaussian splats at different positions
+  Eigen::MatrixXd P1, N1, P2, N2, P3, N3;
+  Eigen::VectorXd sigmas1, weights1, sigmas2, weights2, sigmas3, weights3;
+  
+  create_sphere_gaussians(P1, N1, sigmas1, weights1, 2000);
+  create_sphere_gaussians(P2, N2, sigmas2, weights2, 2000);
+  create_sphere_gaussians(P3, N3, sigmas3, weights3, 2000);
+  
+  // Translate spheres
+  Eigen::Vector3d t1(0.0, 0.0, 0.0);      // Sphere 1 at origin
+  Eigen::Vector3d t2(0.5, 0.0, 0.0);      // Sphere 2 shifted in x (overlapping)
+  Eigen::Vector3d t3(2.5, 0.0, 0.0);      // Sphere 3 shifted in x (non-overlapping)
+  
+  for (int i = 0; i < P2.rows(); ++i) {
+    P2.row(i) += t2;
+  }
+  for (int i = 0; i < P3.rows(); ++i) {
+    P3.row(i) += t3;
+  }
+  
+  // Create geometries
+  auto geom1 = make_gaussian_splat(P1, N1, sigmas1, weights1);
+  auto geom2 = make_gaussian_splat(P2, N2, sigmas2, weights2);
+  auto geom3 = make_gaussian_splat(P3, N3, sigmas3, weights3);
+  
+  std::vector<Geometry> geometries = {geom1, geom2, geom3};
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
+  
+  // Compute volume matrix
+  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256, true);
+  
+  std::cout << std::fixed << std::setprecision(6);
+  std::cout << "Volume matrix (3 Gaussian splat spheres):" << std::endl;
+  std::cout << result.volume_matrix << std::endl;
+  
+  // Verify properties:
+  // 1. Matrix should be symmetric
+  bool is_symmetric = true;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      if (std::abs(result.volume_matrix(i, j) - result.volume_matrix(j, i)) > 1e-5) {
+        is_symmetric = false;
+        break;
+      }
+    }
+    if (!is_symmetric) break;
+  }
+  
+  // 2. Diagonal entries should be self-intersection volumes (≈ 4π/3 for unit sphere)
+  bool diagonal_ok = true;
+  double expected_volume = 4.0 * M_PI / 3.0;  // Unit sphere volume
+  for (int i = 0; i < 3; ++i) {
+    double rel_error = std::abs(result.volume_matrix(i, i) - expected_volume) / expected_volume;
+    if (rel_error > 0.25) {  // 25% tolerance for Gaussian splat approximation
+      diagonal_ok = false;
+      std::cout << "  Warning: Diagonal entry [" << i << "," << i << "] = " 
+                << result.volume_matrix(i, i) << " (expected ~" << expected_volume << ")" << std::endl;
+    }
+  }
+  
+  // 3. Off-diagonal entries
+  std::cout << "\nPairwise intersection volumes:" << std::endl;
+  
+  // Compute analytical ground truth
+  Eigen::Vector3d c1(0.0, 0.0, 0.0);
+  Eigen::Vector3d c2(0.5, 0.0, 0.0);
+  Eigen::Vector3d c3(2.5, 0.0, 0.0);
+  double r = 1.0;  // Unit sphere radius
+  
+  double V01_gt = sphere_sphere_intersection_volume(c1, r, c2, r);
+  double V02_gt = sphere_sphere_intersection_volume(c1, r, c3, r);
+  double V12_gt = sphere_sphere_intersection_volume(c2, r, c3, r);
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[0,1] (Gaussians 1 & 2, overlapping):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(0, 1) << std::endl;
+  std::cout << "    Ground truth: " << V01_gt << std::endl;
+  std::cout << "    Relative error: " << std::scientific << std::abs(result.volume_matrix(0, 1) - V01_gt) / (V01_gt + 1e-10) << std::endl;
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[0,2] (Gaussians 1 & 3, non-overlapping):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(0, 2) << std::endl;
+  std::cout << "    Ground truth: " << V02_gt << std::endl;
+  std::cout << "    Relative error: " << std::scientific << std::abs(result.volume_matrix(0, 2) - V02_gt) / (V02_gt + 1e-10) << std::endl;
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[1,2] (Gaussians 2 & 3, non-overlapping):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(1, 2) << std::endl;
+  std::cout << "    Ground truth: " << V12_gt << std::endl;
+  std::cout << "    Relative error: " << std::scientific << std::abs(result.volume_matrix(1, 2) - V12_gt) / (V12_gt + 1e-10) << std::endl;
+  
+  // Check errors
+  double max_rel_error = 0.0;
+  if (V01_gt > 1e-10) {
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(0, 1) - V01_gt) / V01_gt);
+  }
+  if (V02_gt > 1e-10) {
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(0, 2) - V02_gt) / V02_gt);
+  } else {
+    // For non-overlapping case, check absolute error
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(0, 2) - V02_gt));
+  }
+  if (V12_gt > 1e-10) {
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(1, 2) - V12_gt) / V12_gt);
+  } else {
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(1, 2) - V12_gt));
+  }
+  
+  bool pairwise_ok = max_rel_error < 0.35;  // 35% tolerance for Gaussian splat approximation
+  bool overlap_ok = (result.volume_matrix(0, 1) > 0.1) && (result.volume_matrix(0, 2) < 0.1);
+  
+  std::cout << "\nTest results:" << std::endl;
+  std::cout << "  Symmetric: " << (is_symmetric ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Diagonal:  " << (diagonal_ok ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Pairwise:  " << (pairwise_ok ? "PASS" : "FAIL") << " (max rel error: " << std::scientific << max_rel_error << ")" << std::endl;
+  std::cout << "  Overlap:   " << (overlap_ok ? "PASS" : "FAIL") << std::endl;
+  
+  bool passed = is_symmetric && diagonal_ok && pairwise_ok && overlap_ok;
+  std::cout << "  Overall:   " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
+
+// Test: Mixed geometry types including Gaussian splats (cubes, point clouds, and Gaussian splats)
+bool test_mixed_geometry_with_gaussians(const std::string& leb_file, int Nrad = 96) {
+  std::cout << "\n=== Test: Mixed Geometry Types (Cubes + Point Clouds + Gaussian Splats) ===" << std::endl;
+  
+  // Create 1 unit cube mesh
+  Eigen::MatrixXd V1;
+  Eigen::MatrixXi F1;
+  create_unit_cube_mesh(V1, F1);
+  Eigen::Vector3d t1(0.0, 0.0, 0.0);  // Cube at origin
+  auto geom1 = make_triangle_mesh(V1, F1);
+  
+  // Create 1 unit sphere point cloud
+  Eigen::MatrixXd P2, N2;
+  Eigen::VectorXd radii2;
+  create_sphere_pointcloud(P2, N2, radii2, 2000);
+  Eigen::Vector3d t2(0.3, 0.0, 0.0);  // Sphere shifted in x (overlapping with cube)
+  for (int i = 0; i < P2.rows(); ++i) {
+    P2.row(i) += t2;
+  }
+  auto geom2 = make_point_cloud(P2, N2, radii2, true);
+  
+  // Create 1 unit sphere Gaussian splat
+  Eigen::MatrixXd P3, N3;
+  Eigen::VectorXd sigmas3, weights3;
+  create_sphere_gaussians(P3, N3, sigmas3, weights3, 2000);
+  Eigen::Vector3d t3(0.0, 0.5, 0.0);  // Gaussian splat shifted in y (overlapping with cube)
+  for (int i = 0; i < P3.rows(); ++i) {
+    P3.row(i) += t3;
+  }
+  auto geom3 = make_gaussian_splat(P3, N3, sigmas3, weights3);
+  
+  // Create another Gaussian splat
+  Eigen::MatrixXd P4, N4;
+  Eigen::VectorXd sigmas4, weights4;
+  create_sphere_gaussians(P4, N4, sigmas4, weights4, 2000);
+  Eigen::Vector3d t4(0.3, 0.5, 0.0);  // Gaussian splat shifted in x and y (overlapping with others)
+  for (int i = 0; i < P4.rows(); ++i) {
+    P4.row(i) += t4;
+  }
+  auto geom4 = make_gaussian_splat(P4, N4, sigmas4, weights4);
+  
+  std::vector<Geometry> geometries = {geom1, geom2, geom3, geom4};
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
+  
+  // Compute volume matrix
+  auto result = compute_intersection_volume_matrix_cuda(geometries, KG, 256, true);
+  
+  std::cout << std::fixed << std::setprecision(6);
+  std::cout << "Volume matrix (1 cube + 1 point cloud + 2 Gaussian splats):" << std::endl;
+  std::cout << result.volume_matrix << std::endl;
+  
+  // Verify properties:
+  // 1. Matrix should be symmetric
+  bool is_symmetric = true;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = 0; j < 4; ++j) {
+      if (std::abs(result.volume_matrix(i, j) - result.volume_matrix(j, i)) > 1e-5) {
+        is_symmetric = false;
+        break;
+      }
+    }
+    if (!is_symmetric) break;
+  }
+  
+  // 2. Diagonal entries
+  // Object 0 (cube): should be ≈ 1.0
+  // Objects 1 (point cloud), 2,3 (Gaussian splats): should be ≈ 4π/3
+  bool diagonal_ok = true;
+  double expected_cube_volume = 1.0;
+  double expected_sphere_volume = 4.0 * M_PI / 3.0;
+  
+  double rel_error_cube = std::abs(result.volume_matrix(0, 0) - expected_cube_volume) / expected_cube_volume;
+  if (rel_error_cube > 0.1) {
+    diagonal_ok = false;
+    std::cout << "  Warning: Cube diagonal [0,0] = " 
+              << result.volume_matrix(0, 0) << " (expected ~" << expected_cube_volume << ")" << std::endl;
+  }
+  
+  for (int i = 1; i < 4; ++i) {
+    double rel_error = std::abs(result.volume_matrix(i, i) - expected_sphere_volume) / expected_sphere_volume;
+    if (rel_error > 0.25) {  // 25% tolerance for point cloud and Gaussian splats
+      diagonal_ok = false;
+      std::cout << "  Warning: Sphere diagonal [" << i << "," << i << "] = " 
+                << result.volume_matrix(i, i) << " (expected ~" << expected_sphere_volume << ")" << std::endl;
+    }
+  }
+  
+  // 3. Cross-type intersections
+  std::cout << "\nPairwise intersection volumes:" << std::endl;
+  
+  // Compute analytical ground truth
+  Eigen::Vector3d c_cube(0.0, 0.0, 0.0);
+  Eigen::Vector3d c_pc(0.3, 0.0, 0.0);
+  Eigen::Vector3d c_gauss1(0.0, 0.5, 0.0);
+  Eigen::Vector3d c_gauss2(0.3, 0.5, 0.0);
+  Eigen::Vector3d h(0.5, 0.5, 0.5);  // Half-extents of unit cube
+  double r = 1.0;  // Unit sphere radius
+  
+  double V01_gt = box_sphere_intersection_volume(c_cube, h, c_pc, r);  // cube - point cloud
+  double V02_gt = box_sphere_intersection_volume(c_cube, h, c_gauss1, r);  // cube - Gaussian 1
+  double V03_gt = box_sphere_intersection_volume(c_cube, h, c_gauss2, r);  // cube - Gaussian 2
+  double V12_gt = sphere_sphere_intersection_volume(c_pc, r, c_gauss1, r);  // point cloud - Gaussian 1
+  double V13_gt = sphere_sphere_intersection_volume(c_pc, r, c_gauss2, r);  // point cloud - Gaussian 2
+  double V23_gt = sphere_sphere_intersection_volume(c_gauss1, r, c_gauss2, r);  // Gaussian 1 - Gaussian 2
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[0,1] (cube & point cloud):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(0, 1) << std::endl;
+  std::cout << "    Ground truth (approx): " << V01_gt << std::endl;
+  std::cout << "    Absolute error: " << std::scientific << std::abs(result.volume_matrix(0, 1) - V01_gt) << std::endl;
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[0,2] (cube & Gaussian 1):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(0, 2) << std::endl;
+  std::cout << "    Ground truth (approx): " << V02_gt << std::endl;
+  std::cout << "    Absolute error: " << std::scientific << std::abs(result.volume_matrix(0, 2) - V02_gt) << std::endl;
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[0,3] (cube & Gaussian 2):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(0, 3) << std::endl;
+  std::cout << "    Ground truth (approx): " << V03_gt << std::endl;
+  std::cout << "    Absolute error: " << std::scientific << std::abs(result.volume_matrix(0, 3) - V03_gt) << std::endl;
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[1,2] (point cloud & Gaussian 1):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(1, 2) << std::endl;
+  std::cout << "    Ground truth: " << V12_gt << std::endl;
+  std::cout << "    Relative error: " << std::scientific << std::abs(result.volume_matrix(1, 2) - V12_gt) / (V12_gt + 1e-10) << std::endl;
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[1,3] (point cloud & Gaussian 2):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(1, 3) << std::endl;
+  std::cout << "    Ground truth: " << V13_gt << std::endl;
+  std::cout << "    Relative error: " << std::scientific << std::abs(result.volume_matrix(1, 3) - V13_gt) / (V13_gt + 1e-10) << std::endl;
+  
+  std::cout << std::fixed << std::setprecision(8);
+  std::cout << "  V[2,3] (Gaussian 1 & Gaussian 2):" << std::endl;
+  std::cout << "    Computed: " << result.volume_matrix(2, 3) << std::endl;
+  std::cout << "    Ground truth: " << V23_gt << std::endl;
+  std::cout << "    Relative error: " << std::scientific << std::abs(result.volume_matrix(2, 3) - V23_gt) / (V23_gt + 1e-10) << std::endl;
+  
+  // Check errors
+  double max_rel_error = 0.0;
+  if (V12_gt > 1e-10) {
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(1, 2) - V12_gt) / V12_gt);
+  }
+  if (V13_gt > 1e-10) {
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(1, 3) - V13_gt) / V13_gt);
+  }
+  if (V23_gt > 1e-10) {
+    max_rel_error = std::max(max_rel_error, std::abs(result.volume_matrix(2, 3) - V23_gt) / V23_gt);
+  }
+  
+  // For cube-sphere intersections, check absolute errors (since approximation is rough)
+  double max_abs_error = 0.0;
+  max_abs_error = std::max(max_abs_error, std::abs(result.volume_matrix(0, 1) - V01_gt));
+  max_abs_error = std::max(max_abs_error, std::abs(result.volume_matrix(0, 2) - V02_gt));
+  max_abs_error = std::max(max_abs_error, std::abs(result.volume_matrix(0, 3) - V03_gt));
+  
+  bool pairwise_ok = (max_rel_error < 0.4) && (max_abs_error < 0.6);  // Relaxed tolerance for mixed approximations
+  
+  // Check that cross-type intersections work (should be non-negative)
+  bool cross_type_ok = true;
+  for (int i = 0; i < 4; ++i) {
+    for (int j = i + 1; j < 4; ++j) {
+      if (result.volume_matrix(i, j) < -1e-6) {  // Allow small numerical errors
+        cross_type_ok = false;
+        std::cout << "  Warning: Negative cross-type intersection [" << i << "," << j << "] = " 
+                  << result.volume_matrix(i, j) << std::endl;
+      }
+    }
+  }
+  
+  std::cout << "\nTest results:" << std::endl;
+  std::cout << "  Symmetric:    " << (is_symmetric ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Diagonal:     " << (diagonal_ok ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Pairwise:     " << (pairwise_ok ? "PASS" : "FAIL") << " (max rel error: " << std::scientific << max_rel_error << ", max abs error: " << max_abs_error << ")" << std::endl;
+  std::cout << "  Cross-type:   " << (cross_type_ok ? "PASS" : "FAIL") << std::endl;
+  
+  bool passed = is_symmetric && diagonal_ok && pairwise_ok && cross_type_ok;
+  std::cout << "  Overall:      " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0] << " <lebedev_txt_file> [Nrad]" << std::endl;
@@ -656,6 +1022,12 @@ int main(int argc, char** argv) {
   
   // Test 3: Mixed geometry types (cubes + spheres)
   all_passed &= test_mixed_geometry_types(leb_file, Nrad);
+  
+  // Test 4: Three unit sphere Gaussian splats
+  all_passed &= test_three_gaussian_splats(leb_file, Nrad);
+  
+  // Test 5: Mixed geometry types including Gaussian splats
+  all_passed &= test_mixed_geometry_with_gaussians(leb_file, Nrad);
   
   std::cout << "\n=== Summary ===" << std::endl;
   if (all_passed) {

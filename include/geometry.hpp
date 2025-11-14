@@ -9,7 +9,7 @@ struct Geometry {
   GeometryType type;
   std::vector<TriPacked> tris;
   std::vector<DiskPacked> disks;
-  // Future: std::vector<GaussianPacked> gaussians;
+  std::vector<GaussianPacked> gaussians;
   
   // Constructors
   Geometry() : type(GEOM_TRIANGLE) {}
@@ -20,6 +20,7 @@ struct Geometry {
     switch (type) {
       case GEOM_TRIANGLE: return (int)tris.size();
       case GEOM_DISK: return (int)disks.size();
+      case GEOM_GAUSSIAN: return (int)gaussians.size();
       default: return 0;
     }
   }
@@ -32,6 +33,7 @@ struct Geometry {
   void clear() {
     tris.clear();
     disks.clear();
+    gaussians.clear();
   }
 };
 

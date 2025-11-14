@@ -113,6 +113,7 @@ __device__ __forceinline__ float2 Phi_ab(float alpha, float beta) {
 
 using PoIntInt::TriPacked;
 using PoIntInt::DiskPacked;
+using PoIntInt::GaussianPacked;
 
 // ===================== Phase 1: Compute Form Factor Matrix J =====================
 // Kernel to compute J[q, obj] = A_obj(k_q) for all k-nodes and objects
@@ -123,9 +124,12 @@ void compute_form_factor_matrix_kernel(
   const int* __restrict__ tri_counts,             // Number of triangles per object
   const DiskPacked* __restrict__ disks_array,     // Flattened: all disks from all objects
   const int* __restrict__ disk_counts,            // Number of disks per object
-  const int* __restrict__ geom_types,             // Geometry type per object (0=triangle, 1=disk)
+  const GaussianPacked* __restrict__ gaussians_array, // Flattened: all Gaussians from all objects
+  const int* __restrict__ gaussian_counts,        // Number of Gaussians per object
+  const int* __restrict__ geom_types,             // Geometry type per object (0=triangle, 1=disk, 2=Gaussian)
   const int* __restrict__ tri_offsets,            // Offset into tris_array for each object
   const int* __restrict__ disk_offsets,           // Offset into disks_array for each object
+  const int* __restrict__ gaussian_offsets,       // Offset into gaussians_array for each object
   int num_objects,
   const float3* __restrict__ kdirs,               // Q k-directions
   const float* __restrict__ kmags,                // Q k-magnitudes
@@ -184,6 +188,32 @@ void compute_form_factor_matrix_kernel(
           float x = fminf(disk.rho * r, 100.0f);
           Smag = disk.area * 2.0f * J1_over_x(x);
         }
+        
+        float Apar = kpar_coeff * Smag;
+        if (!isfinite(Apar)) Apar = 0.0f;
+        
+        A.x += eikc.x * Apar;
+        A.y += eikc.y * Apar;
+      }
+    }
+  } else if (geom_type == 2) {  // GEOM_GAUSSIAN
+    int gaussian_offset = gaussian_offsets[obj];
+    int NG = gaussian_counts[obj];
+    
+    // Each thread processes multiple Gaussians
+    for (int i = threadIdx.x; i < NG; i += blockDim.x) {
+      GaussianPacked g = gaussians_array[gaussian_offset + i];
+      if (g.sigma > 0.0f && g.w >= 0.0f) {
+        float kpar_coeff = fmaf(u.x, g.n.x, fmaf(u.y, g.n.y, u.z * g.n.z));
+        float kdotn = k * kpar_coeff;
+        float r2 = fmaxf(k * k - kdotn * kdotn, 0.0f);  // ||k_perp||^2
+        
+        float phase = fmaf(kx, g.c.x, fmaf(ky, g.c.y, kz * g.c.z));
+        float2 eikc = cexp_i(phase);
+        
+        // S_gauss(k) = w * exp(-0.5 * sigma^2 * ||k_perp||^2)
+        float exp_arg = -0.5f * g.sigma * g.sigma * r2;
+        float Smag = g.w * expf(exp_arg);
         
         float Apar = kpar_coeff * Smag;
         if (!isfinite(Apar)) Apar = 0.0f;
@@ -294,23 +324,29 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   // Flatten geometry data for GPU
   std::vector<TriPacked> all_tris;
   std::vector<DiskPacked> all_disks;
+  std::vector<GaussianPacked> all_gaussians;
   std::vector<int> tri_counts(num_objects);
   std::vector<int> disk_counts(num_objects);
+  std::vector<int> gaussian_counts(num_objects);
   std::vector<int> geom_types(num_objects);
   std::vector<int> tri_offsets(num_objects);
   std::vector<int> disk_offsets(num_objects);
+  std::vector<int> gaussian_offsets(num_objects);
   
   int tri_offset = 0;
   int disk_offset = 0;
+  int gaussian_offset = 0;
   
   for (int obj = 0; obj < num_objects; ++obj) {
     geom_types[obj] = (int)geometries[obj].type;
     tri_offsets[obj] = tri_offset;
     disk_offsets[obj] = disk_offset;
+    gaussian_offsets[obj] = gaussian_offset;
     
     if (geometries[obj].type == GEOM_TRIANGLE) {
       tri_counts[obj] = (int)geometries[obj].tris.size();
       disk_counts[obj] = 0;
+      gaussian_counts[obj] = 0;
       for (const auto& t : geometries[obj].tris) {
         all_tris.push_back(t);
       }
@@ -318,21 +354,33 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     } else if (geometries[obj].type == GEOM_DISK) {
       tri_counts[obj] = 0;
       disk_counts[obj] = (int)geometries[obj].disks.size();
+      gaussian_counts[obj] = 0;
       for (const auto& d : geometries[obj].disks) {
         all_disks.push_back(d);
       }
       disk_offset += disk_counts[obj];
+    } else if (geometries[obj].type == GEOM_GAUSSIAN) {
+      tri_counts[obj] = 0;
+      disk_counts[obj] = 0;
+      gaussian_counts[obj] = (int)geometries[obj].gaussians.size();
+      for (const auto& g : geometries[obj].gaussians) {
+        all_gaussians.push_back(g);
+      }
+      gaussian_offset += gaussian_counts[obj];
     }
   }
   
   // Allocate device memory
   TriPacked* d_tris = nullptr;
   DiskPacked* d_disks = nullptr;
+  GaussianPacked* d_gaussians = nullptr;
   int* d_tri_counts = nullptr;
   int* d_disk_counts = nullptr;
+  int* d_gaussian_counts = nullptr;
   int* d_geom_types = nullptr;
   int* d_tri_offsets = nullptr;
   int* d_disk_offsets = nullptr;
+  int* d_gaussian_offsets = nullptr;
   float3* d_kdirs = nullptr;
   float* d_kmags = nullptr;
   float2* d_J = nullptr;
@@ -345,11 +393,14 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
       std::cerr << "CUDA error at " << __FILE__ << ":" << __LINE__ << " - " << cudaGetErrorString(err) << std::endl; \
       if (d_tris) cudaFree(d_tris); \
       if (d_disks) cudaFree(d_disks); \
+      if (d_gaussians) cudaFree(d_gaussians); \
       if (d_tri_counts) cudaFree(d_tri_counts); \
       if (d_disk_counts) cudaFree(d_disk_counts); \
+      if (d_gaussian_counts) cudaFree(d_gaussian_counts); \
       if (d_geom_types) cudaFree(d_geom_types); \
       if (d_tri_offsets) cudaFree(d_tri_offsets); \
       if (d_disk_offsets) cudaFree(d_disk_offsets); \
+      if (d_gaussian_offsets) cudaFree(d_gaussian_offsets); \
       if (d_kdirs) cudaFree(d_kdirs); \
       if (d_kmags) cudaFree(d_kmags); \
       if (d_J) cudaFree(d_J); \
@@ -375,11 +426,19 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     CUDA_CHECK(cudaMalloc(&d_disks, sizeof(DiskPacked)));  // At least 1 element
   }
   
+  if (!all_gaussians.empty()) {
+    CUDA_CHECK(cudaMalloc(&d_gaussians, all_gaussians.size() * sizeof(GaussianPacked)));
+  } else {
+    CUDA_CHECK(cudaMalloc(&d_gaussians, sizeof(GaussianPacked)));  // At least 1 element
+  }
+  
   CUDA_CHECK(cudaMalloc(&d_tri_counts, num_objects * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_disk_counts, num_objects * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&d_gaussian_counts, num_objects * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_geom_types, num_objects * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_tri_offsets, num_objects * sizeof(int)));
   CUDA_CHECK(cudaMalloc(&d_disk_offsets, num_objects * sizeof(int)));
+  CUDA_CHECK(cudaMalloc(&d_gaussian_offsets, num_objects * sizeof(int)));
   
   // Allocate k-grid data
   std::vector<float3> h_kdirs(Q);
@@ -403,11 +462,16 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   if (!all_disks.empty()) {
     CUDA_CHECK(cudaMemcpy(d_disks, all_disks.data(), all_disks.size() * sizeof(DiskPacked), cudaMemcpyHostToDevice));
   }
+  if (!all_gaussians.empty()) {
+    CUDA_CHECK(cudaMemcpy(d_gaussians, all_gaussians.data(), all_gaussians.size() * sizeof(GaussianPacked), cudaMemcpyHostToDevice));
+  }
   CUDA_CHECK(cudaMemcpy(d_tri_counts, tri_counts.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_disk_counts, disk_counts.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_gaussian_counts, gaussian_counts.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_geom_types, geom_types.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_tri_offsets, tri_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_disk_offsets, disk_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_gaussian_offsets, gaussian_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
   
   // Copy k-grid data
   CUDA_CHECK(cudaMemcpy(d_kdirs, h_kdirs.data(), Q * sizeof(float3), cudaMemcpyHostToDevice));
@@ -421,9 +485,9 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   dim3 grid_J(Q, num_objects);
   dim3 block_J(blockSize);
   compute_form_factor_matrix_kernel<<<grid_J, block_J>>>(
-    d_tris, d_tri_counts, d_disks, d_disk_counts, d_geom_types,
-    d_tri_offsets, d_disk_offsets, num_objects,
-    d_kdirs, d_kmags, Q, d_J
+    d_tris, d_tri_counts, d_disks, d_disk_counts, d_gaussians, d_gaussian_counts,
+    d_geom_types, d_tri_offsets, d_disk_offsets, d_gaussian_offsets,
+    num_objects, d_kdirs, d_kmags, Q, d_J
   );
   CUDA_CHECK(cudaDeviceSynchronize());
   
@@ -474,8 +538,8 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     std::cout << "Block size: " << blockSize << std::endl;
     
     // Count geometry types
-    int num_meshes = 0, num_pointclouds = 0;
-    int total_tris = 0, total_disks = 0;
+    int num_meshes = 0, num_pointclouds = 0, num_gaussians = 0;
+    int total_tris = 0, total_disks = 0, total_gaussians = 0;
     for (const auto& geom : geometries) {
       if (geom.type == GEOM_TRIANGLE) {
         num_meshes++;
@@ -483,11 +547,15 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
       } else if (geom.type == GEOM_DISK) {
         num_pointclouds++;
         total_disks += (int)geom.disks.size();
+      } else if (geom.type == GEOM_GAUSSIAN) {
+        num_gaussians++;
+        total_gaussians += (int)geom.gaussians.size();
       }
     }
-    std::cout << "Geometry types: " << num_meshes << " meshes, " << num_pointclouds << " point clouds" << std::endl;
+    std::cout << "Geometry types: " << num_meshes << " meshes, " << num_pointclouds << " point clouds, " << num_gaussians << " Gaussian splats" << std::endl;
     if (total_tris > 0) std::cout << "Total triangles: " << total_tris << std::endl;
     if (total_disks > 0) std::cout << "Total disks: " << total_disks << std::endl;
+    if (total_gaussians > 0) std::cout << "Total Gaussians: " << total_gaussians << std::endl;
     
     std::cout << "--- Timing (ms) ---" << std::endl;
     std::cout << "  Memory allocation: " << std::setw(8) << malloc_time << " ms" << std::endl;
@@ -502,11 +570,14 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   // Cleanup
   cudaFree(d_tris);
   cudaFree(d_disks);
+  cudaFree(d_gaussians);
   cudaFree(d_tri_counts);
   cudaFree(d_disk_counts);
+  cudaFree(d_gaussian_counts);
   cudaFree(d_geom_types);
   cudaFree(d_tri_offsets);
   cudaFree(d_disk_offsets);
+  cudaFree(d_gaussian_offsets);
   cudaFree(d_kdirs);
   cudaFree(d_kmags);
   cudaFree(d_J);
