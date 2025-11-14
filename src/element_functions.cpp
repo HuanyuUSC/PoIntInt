@@ -54,7 +54,7 @@ std::complex<double> Triangle_E_double_prime(double z) {
     double c = std::cos(z);
     double z3 = z * z * z;
     double re = (2.0 * s - 2.0 * z * c - z2 * s) / z3;
-    double im = (2.0 * (1.0 - c) - 2.0 * z * s - z2 * (1.0 - c)) / z3;
+    double im = (2.0 * (1.0 - c) - 2.0 * z * s + z2 * c) / z3;
     return std::complex<double>(re, im);
   }
 }
@@ -62,7 +62,7 @@ std::complex<double> Triangle_E_double_prime(double z) {
 // Phi(alpha, beta) = -2i [E(beta) - E(alpha)] / (beta - alpha)
 std::complex<double> Triangle_Phi_ab(double alpha, double beta) {
   double d = beta - alpha;
-  if (std::abs(d) < 1e-5) {
+  if (std::abs(d) < 1e-3) {
     return -2.0 * I * Triangle_E_prime(0.5 * (alpha + beta));
   } else {
     return -2.0 * I * (Triangle_E_func(beta) - Triangle_E_func(alpha)) / d;
