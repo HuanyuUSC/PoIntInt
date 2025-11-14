@@ -27,18 +27,22 @@ Eigen::VectorXcd compute_gradient_finite_diff(
   Eigen::VectorXcd grad(n_dofs);
   
   for (int i = 0; i < n_dofs; ++i) {
-    // Forward difference
-    Eigen::VectorXd dofs_plus = dofs;
-    dofs_plus(i) += eps;
-    std::complex<double> A_plus = dof_param->compute_A(geom, k, dofs_plus);
-    
-    // Backward difference
-    Eigen::VectorXd dofs_minus = dofs;
-    dofs_minus(i) -= eps;
-    std::complex<double> A_minus = dof_param->compute_A(geom, k, dofs_minus);
+    // 5-point finite difference
+    Eigen::VectorXd dofs_tmp = dofs;
+    dofs_tmp(i) += 2.0 * eps;
+    std::complex<double> A_p2 = dof_param->compute_A(geom, k, dofs_tmp);
+
+    dofs_tmp(i) -= eps;
+    std::complex<double> A_p1 = dof_param->compute_A(geom, k, dofs_tmp);
+
+    dofs_tmp(i) -= 2.0 * eps;
+    std::complex<double> A_m1 = dof_param->compute_A(geom, k, dofs_tmp);
+
+    dofs_tmp(i) -= eps;
+    std::complex<double> A_m2 = dof_param->compute_A(geom, k, dofs_tmp);
     
     // Central difference: (f(x+h) - f(x-h)) / (2h)
-    grad(i) = (A_plus - A_minus) / (2.0 * eps);
+    grad(i) = (-A_p2 + 8.0 * A_p1 - 8.0 * A_m1 + A_m2) / (12.0 * eps);
   }
   
   return grad;
