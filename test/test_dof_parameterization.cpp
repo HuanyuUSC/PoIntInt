@@ -5,7 +5,7 @@
 #include <vector>
 #include <complex>
 #include "dof/affine_dof.hpp"
-#include "dof/dof_helpers.hpp"
+#include "form_factor_helpers.hpp"
 #include "geometry/packing.hpp"
 #include "compute_volume.hpp"
 #include "quadrature/lebedev_io.hpp"
@@ -13,52 +13,8 @@
 
 using namespace PoIntInt;
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-// Forward declaration - we'll use the implementation from dof_parameterization.cpp
-// For testing, we'll reimplement a simpler version here
+// Compute A(k) for a geometry by applying DoF and computing form factor
 namespace {
-  // Compute A_parallel(k) for triangles (simplified version for testing)
-  std::complex<double> compute_A_triangle_simple(
-    const TriPacked& tri,
-    const Eigen::Vector3d& k)
-  {
-    double kmag = k.norm();
-    if (kmag < 1e-10) return std::complex<double>(0.0, 0.0);
-    
-    Eigen::Vector3d e1(tri.e1.x, tri.e1.y, tri.e1.z);
-    Eigen::Vector3d e2(tri.e2.x, tri.e2.y, tri.e2.z);
-    Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
-    Eigen::Vector3d S(tri.S.x, tri.S.y, tri.S.z);
-    
-    double alpha = k.dot(e1);
-    double beta = k.dot(e2);
-    double gamma = k.dot(S) / kmag;
-    
-    auto sinc = [](double x) -> std::complex<double> {
-      if (std::abs(x) < 1e-4) {
-        return std::complex<double>(1.0 - x*x/6.0, -x/2.0);
-      }
-      return (std::exp(std::complex<double>(0.0, x)) - 1.0) / std::complex<double>(0.0, x);
-    };
-    
-    std::complex<double> phi;
-    if (std::abs(alpha - beta) < 1e-6 && std::abs(alpha) < 1e-6) {
-      phi = std::complex<double>(0.5, 0.0);
-    } else {
-      std::complex<double> sinc_alpha = sinc(alpha);
-      std::complex<double> sinc_beta = sinc(beta);
-      std::complex<double> sinc_diff = sinc(alpha - beta);
-      phi = (sinc_beta * sinc_diff - sinc_alpha) / std::complex<double>(0.0, beta);
-    }
-    
-    std::complex<double> phase = std::exp(std::complex<double>(0.0, k.dot(a)));
-    return phase * phi * gamma;
-  }
-  
-  // Compute A(k) for a geometry by applying DoF and computing form factor
   std::complex<double> compute_A_with_dofs(
     const Geometry& geom,
     const Eigen::Vector3d& k,
@@ -68,17 +24,8 @@ namespace {
     // Apply transformation
     Geometry transformed = dof_param->apply(geom, dofs);
     
-    // Compute A(k) for transformed geometry
-    std::complex<double> A_total(0.0, 0.0);
-    
-    if (transformed.type == GEOM_TRIANGLE) {
-      for (const auto& tri : transformed.tris) {
-        A_total += compute_A_triangle_simple(tri, k);
-      }
-    }
-    // Add disk and Gaussian support if needed
-    
-    return A_total;
+    // Compute A(k) for transformed geometry using helper
+    return compute_A_geometry(transformed, k);
   }
 }
 

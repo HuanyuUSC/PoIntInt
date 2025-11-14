@@ -1,5 +1,5 @@
 #include "dof/affine_dof.hpp"
-#include "dof/dof_helpers.hpp"
+#include "form_factor_helpers.hpp"
 #include "geometry/packing.hpp"
 #include <cuda_runtime.h>
 #include <cassert>
@@ -102,13 +102,13 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
     Eigen::VectorXd dofs_plus = dofs;
     dofs_plus(i) += eps;
     Geometry geom_plus = apply(geom, dofs_plus);
-    std::complex<double> A_plus = compute_A_geometry_cpu(geom_plus, k);
+    std::complex<double> A_plus = compute_A_geometry(geom_plus, k);
     
     // Backward difference
     Eigen::VectorXd dofs_minus = dofs;
     dofs_minus(i) -= eps;
     Geometry geom_minus = apply(geom, dofs_minus);
-    std::complex<double> A_minus = compute_A_geometry_cpu(geom_minus, k);
+    std::complex<double> A_minus = compute_A_geometry(geom_minus, k);
     
     // Central difference: (f(x+h) - f(x-h)) / (2h)
     grad(i) = (A_plus - A_minus) / (2.0 * eps);

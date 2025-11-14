@@ -7,6 +7,7 @@
 #include <cassert>
 #include "compute_volume.hpp"
 #include "geometry/packing.hpp"
+#include "form_factor_helpers.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/gauss_legendre.hpp"
 #include "quadrature/kgrid.hpp"
@@ -21,23 +22,7 @@ using namespace PoIntInt;
 // Exact formulas for unit cube [-1/2, 1/2]^3
 // ============================================================================
 
-// Exact form factor: F(k) = ∏_{i=x,y,z} sin(k_i/2) / (k_i/2)
-// For k_i = 0, use limit: sin(0)/0 = 1
-inline double exact_cube_form_factor(double kx, double ky, double kz) {
-  auto sinc = [](double x) {
-    if (std::abs(x) < 1e-4) 
-      return 1.0 - x * x / 6.0 + x * x * x * x / 120.0;
-    return std::sin(x) / x;
-  };
-  return sinc(0.5 * kx) * sinc(0.5 * ky) * sinc(0.5 * kz);
-}
-
-// Exact A(k) = i k F(k), so |A(k)|² = |k|² |F(k)|²
-inline double exact_cube_Ak_squared(double kx, double ky, double kz) {
-  double k2 = kx*kx + ky*ky + kz*kz;
-  double F = exact_cube_form_factor(kx, ky, kz);
-  return k2 * F * F;
-}
+// Use exact formulas from form_factor_helpers
 
 // ============================================================================
 // Helper: Create unit cube mesh centered at origin [-1/2, 1/2]^3
@@ -66,88 +51,7 @@ void create_unit_cube_mesh(Eigen::MatrixXd& V, Eigen::MatrixXi& F) {
     1, 6, 5,  1, 2, 6;   // x =  0.5 (right)
 }
 
-// ============================================================================
-// CPU implementation of A(k) computation from mesh (for testing)
-// ============================================================================
-
-// Compute A(k) = ∫ e^{ik·x} n(x) dS for a mesh
-std::pair<double, double> compute_scalar_Ak_from_mesh(const std::vector<TriPacked>& tris, const std::array<double, 3>& kdir, double kmag) {
-  std::pair<double, double> A = {0.0, 0.0};
-  double kx = kmag * kdir[0];
-  double ky = kmag * kdir[1];
-  double kz = kmag * kdir[2];
-  
-  for (const auto& t : tris) {
-    // Convert float3 to double for computation
-    double ax = t.a.x, ay = t.a.y, az = t.a.z;
-    double e1x = t.e1.x, e1y = t.e1.y, e1z = t.e1.z;
-    double e2x = t.e2.x, e2y = t.e2.y, e2z = t.e2.z;
-    double Sx = t.S.x, Sy = t.S.y, Sz = t.S.z;
-    
-    // alpha = k · e1, beta = k · e2
-    double alpha = kx * e1x + ky * e1y + kz * e1z;
-    double beta = kx * e2x + ky * e2y + kz * e2z;
-    double gamma = kdir[0] * Sx + kdir[1] * Sy + kdir[2] * Sz;
-    
-    // Phi(alpha, beta) = 2i [E(beta) - E(alpha)]/(beta - alpha)
-    // E(z) = (sin z + i(1-cos z)) / z
-    auto E_func = [](double z) -> std::pair<double, double> {
-      if (std::abs(z) < 1e-4) {
-        double z2 = z * z, z4 = z2 * z2;
-        double real = 1.0 - z2 / 6.0 + z4 / 120.0;
-        double imag = z * 0.5 - z * z2 / 24.0 + z4 * z / 720.0;
-        return {real, imag};  // E(0) = 1
-      }
-      double s = std::sin(z);
-      double c = std::cos(z);
-      return {s / z, (1.0 - c) / z};
-    };
-
-    auto E_prime = [](double z) -> std::pair<double, double> {
-      double z2 = z * z;
-      if (std::abs(z) < 1e-4) {
-        double z3 = z * z2, z4 = z2 * z2;
-        double real = -z / 3.0 + z3 / 30.0;
-        double imag = 0.5 - z2 / 8.0 + z4 / 120.0;
-        return { real, imag };
-      }
-      double s = std::sin(z);
-      double c = std::cos(z);
-      return { (z * c - s) / z2, (z * s - (1.0f - c)) / z2 };
-      };
-    
-    std::pair<double, double> phi;
-    double d = beta - alpha;
-    if (std::abs(d) < 1e-4) {
-      // Use derivative: E'(z) = (z cos z - sin z + i(z sin z - (1-cos z))) / z²
-      auto Ep = E_prime(0.5 * (alpha + beta));
-      // 2i * (Ep.re + i Ep.im) = 2i*Ep.re - 2*Ep.im
-      phi = { 2.0 * Ep.second, -2.0f * Ep.first };
-    } else {
-      auto Ea = E_func(alpha);
-      auto Eb = E_func(beta);
-      double num_re = Eb.first - Ea.first;
-      double num_im = Eb.second - Ea.second;
-      // 2i * (num_re + i*num_im) / d = (-2*num_im, 2*num_re) / d
-      phi = {2.0 * num_im / d, -2.0 * num_re / d};
-    }
-    
-    // Phase: k · a
-    double phase = kx * ax + ky * ay + kz * az;
-    double cos_phase = std::cos(phase);
-    double sin_phase = std::sin(phase);
-    
-    // e^{ik·a} * phi
-    double scalar_re = cos_phase * phi.first - sin_phase * phi.second;
-    double scalar_im = sin_phase * phi.first + cos_phase * phi.second;
-    
-    // Accumulate: scalar * S
-    A.first += scalar_re * gamma;
-    A.second += scalar_im * gamma;
-  }
-  
-  return A;
-}
+// Use compute_A_geometry from form_factor_helpers instead of duplicate implementation
 
 // ============================================================================
 // Test 1: Compare computed form factor field A(k) to exact formula
@@ -183,12 +87,13 @@ bool test_form_factor_field(const std::string& leb_file, int Nrad = 32) {
     double ky = k_test.first[1] * k_test.second;
     double kz = k_test.first[2] * k_test.second;
     
-    // Compute A(k) from mesh
-    std::pair<double, double> A_mesh = compute_scalar_Ak_from_mesh(geom.tris, k_test.first, k_test.second);
-    double Ak2_mesh = A_mesh.first * A_mesh.first + A_mesh.second * A_mesh.second;
+    // Compute A(k) from mesh using form_factor_helpers
+    Eigen::Vector3d k_vec(kx, ky, kz);
+    std::complex<double> A_complex = compute_A_geometry(geom, k_vec);
+    double Ak2_mesh = std::norm(A_complex);  // |A|^2 = real^2 + imag^2
     
     // Exact |A(k)|²
-    double Ak2_exact = exact_cube_Ak_squared(kx, ky, kz);
+    double Ak2_exact = exact_cube_Ak_squared(kx, ky, kz);  // From form_factor_helpers
     
     double rel_error = std::abs(Ak2_mesh - Ak2_exact) / (std::abs(Ak2_exact) + 1e-10);
     
@@ -251,7 +156,7 @@ bool test_volume_from_form_factor_integral(const std::string& leb_file, int Nrad
     double kz = k * dir[2];
     
     // |F(k)|² using exact formula for unit cube
-    double F = exact_cube_form_factor(kx, ky, kz);
+    double F = exact_cube_form_factor(kx, ky, kz);  // From form_factor_helpers
     double F2 = F * F;
     
     // Weight includes w_angular * w_radial * sec²(t)

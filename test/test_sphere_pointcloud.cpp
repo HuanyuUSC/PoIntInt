@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include "compute_volume.hpp"
 #include "geometry/packing.hpp"
+#include "form_factor_helpers.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/gauss_legendre.hpp"
 #include "quadrature/kgrid.hpp"
@@ -22,25 +23,7 @@ using namespace PoIntInt;
 // Exact formulas for unit sphere (radius R = 1)
 // ============================================================================
 
-// Exact form factor for solid ball: F_ball(k) = 4π (sin(kR) - kR cos(kR))/k³
-// For unit sphere (R=1): F_ball(k) = 4π (sin(k) - k cos(k))/k³
-inline double exact_sphere_form_factor(double k) {
-  if (std::abs(k) < 1e-4) {
-    // Limit as k->0: F_ball(0) = 4πR³/3 = 4π/3 for R=1
-    return 4.0 * M_PI * (1.0 / 3.0 - k * k / 30.0 + k * k * k * k / 840.0);
-  }
-  double k3 = k * k * k;
-  double sin_k = std::sin(k);
-  double cos_k = std::cos(k);
-  return 4.0 * M_PI * (sin_k - k * cos_k) / k3;
-}
-
-// Exact |A(k)|² for sphere
-// A(k) = i k F(k), so |A(k)|² = |k|² |F(k)|²
-inline double exact_sphere_Ak_squared(double k) {
-  double F = exact_sphere_form_factor(k);
-  return k * k * F * F;
-}
+// Use exact formulas from form_factor_helpers
 
 // ============================================================================
 // Helper: Create unit sphere as oriented point cloud
@@ -84,86 +67,7 @@ void create_sphere_pointcloud(
   }
 }
 
-// ============================================================================
-// CPU implementation of A_parallel(k) for point cloud (for testing)
-// ============================================================================
-std::pair<double, double> compute_scalar_Ak_from_pointcloud(
-  const std::vector<DiskPacked>& disks,
-  const std::array<double, 3>& kdir,
-  double kmag)
-{
-  std::pair<double, double> A = {0.0, 0.0};
-  double kx = kmag * kdir[0];
-  double ky = kmag * kdir[1];
-  double kz = kmag * kdir[2];
-  
-  for (const auto& d : disks) {    
-    // k_⟂ = k - (k·n) n
-    double kdir_dot_n = kdir[0] * d.n.x + kdir[1] * d.n.y + kdir[2] * d.n.z;
-    double k_dot_n = kmag * kdir_dot_n;
-    double r = std::sqrt(kmag * kmag - k_dot_n * k_dot_n);
-
-    auto J1_over_x = [](double x) -> double {
-      double ax = abs(x);
-
-      // Tiny x: even Taylor up to x^8
-      if (ax < 1e-3) {
-        double x2 = x * x;
-        double t = 0.5;                      // 1/2
-        t += (-1.0 / 16.0) * x2;              // - x^2/16
-        double x4 = x2 * x2;
-        t += (1.0 / 384.0) * x4;              // + x^4/384
-        double x6 = x4 * x2;
-        t += (-1.0 / 18432.0) * x6;           // - x^6/18432
-        return t;
-      }
-
-      // Small–moderate x: stable series with term recurrence
-      if (ax <= 12.0) {
-        double q = 0.25 * x * x;            // x^2/4
-        double term = 0.5;                    // m=0
-        double sum = term;
-        #pragma unroll
-        for (int m = 0; m < 20; ++m) {
-          double denom = (double)(m + 1) * (double)(m + 2);
-          term *= -q / denom;              // term_{m+1}
-          sum += term;
-          if (abs(term) < 1e-7 * abs(sum)) break;
-        }
-        return sum;
-      }
-
-      // Large x: Hankel asymptotics (3 correction terms), then divide by x
-      double invx = 1.0 / ax;
-      double invx2 = invx * invx;
-      double invx3 = invx2 * invx;
-
-      double chi = ax - 0.75 * M_PI;
-      double amp = sqrt(2.0 / (M_PI * ax));
-      double cosp = (1.0 - 15.0 / 128.0 * invx2) * std::cos(chi);
-      double sinp = (3.0 / 8.0 * invx - 315.0 / 3072.0 * invx3) * std::sin(chi);
-      double J1 = amp * (cosp - sinp);
-      return J1 * invx;
-      };
-    
-    // S_disk(k) = e^{ik·c} * (2πρ J₁(ρr))/r
-    // When r -> 0: J₁(ρr)/r -> ρ/2
-    double rho_r = d.rho * r;
-    double S_magnitude = (rho_r < 1e-10) ? d.area : 2.0 * d.area * J1_over_x(rho_r);
-    
-    // A_parallel = (k·n)/|k| * S_disk
-    double A_parallel_mag = (kmag < 1e-10) ? 0.0 : kdir_dot_n * S_magnitude;
-
-    // k·c (phase)
-    double phase = kx * d.c.x + ky * d.c.y + kz * d.c.z;
-    
-    // e^{ik·c} * A_parallel   
-    A.first += std::cos(phase) * A_parallel_mag;
-    A.second += std::sin(phase) * A_parallel_mag;
-  }
-  
-  return A;
-}
+// Use compute_A_geometry from form_factor_helpers instead of duplicate implementation
 
 // ============================================================================
 // Test 1: Compare computed form factor field from point cloud to exact formula
@@ -200,12 +104,13 @@ bool test_sphere_form_factor_field(const std::string& leb_file, int Nrad = 32) {
     double kz = k_test.first[2] * k_test.second;
     double k_mag = std::sqrt(kx*kx + ky*ky + kz*kz);
     
-    // Compute A_parallel(k) from point cloud
-    std::pair<double, double> A_mesh = compute_scalar_Ak_from_pointcloud(geom.disks, k_test.first, k_test.second);
-    double Ak2_mesh = A_mesh.first * A_mesh.first + A_mesh.second * A_mesh.second;
+    // Compute A_parallel(k) from point cloud using form_factor_helpers
+    Eigen::Vector3d k_vec(kx, ky, kz);
+    std::complex<double> A_complex = compute_A_geometry(geom, k_vec);
+    double Ak2_mesh = std::norm(A_complex);  // |A|^2 = real^2 + imag^2
     
     // Exact |A(k)|² for sphere (depends only on |k|)
-    double Ak2_exact = exact_sphere_Ak_squared(k_mag);
+    double Ak2_exact = exact_sphere_Ak_squared(k_mag);  // From form_factor_helpers
     
     double rel_error = std::abs(Ak2_mesh - Ak2_exact) / (std::abs(Ak2_exact) + 1e-10);
     
@@ -256,7 +161,7 @@ bool test_sphere_volume_from_form_factor_integral(const std::string& leb_file, i
     double k = KG.kmag[q];
     
     // |F(k)|² using exact formula (depends only on |k| for sphere)
-    double F = exact_sphere_form_factor(k);
+    double F = exact_sphere_form_factor(k);  // From form_factor_helpers
     double F2 = F * F;
     
     // Weight includes w_angular * w_radial * sec²(t)

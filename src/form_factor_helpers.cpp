@@ -1,5 +1,4 @@
-#include "dof/dof_helpers.hpp"
-#include "geometry/packing.hpp"
+#include "form_factor_helpers.hpp"
 #include <cmath>
 #include <complex>
 
@@ -10,11 +9,11 @@
 namespace PoIntInt {
 
 // ============================================================================
-// Helper: Compute A(k) for a geometry on CPU (for gradient computation)
+// Form Factor Field Computation Helpers
 // ============================================================================
 
 // Compute A_parallel(k) = (k·A(k))/|k| for triangles
-std::complex<double> compute_A_triangle_cpu(
+std::complex<double> compute_A_triangle(
   const TriPacked& tri,
   const Eigen::Vector3d& k)
 {
@@ -55,7 +54,7 @@ std::complex<double> compute_A_triangle_cpu(
 }
 
 // Compute A_parallel(k) for disks
-std::complex<double> compute_A_disk_cpu(
+std::complex<double> compute_A_disk(
   const DiskPacked& disk,
   const Eigen::Vector3d& k)
 {
@@ -111,7 +110,7 @@ std::complex<double> compute_A_disk_cpu(
 }
 
 // Compute A_parallel(k) for Gaussian splats
-std::complex<double> compute_A_gaussian_cpu(
+std::complex<double> compute_A_gaussian(
   const GaussianPacked& gauss,
   const Eigen::Vector3d& k)
 {
@@ -135,7 +134,7 @@ std::complex<double> compute_A_gaussian_cpu(
 }
 
 // Compute A_parallel(k) for entire geometry
-std::complex<double> compute_A_geometry_cpu(
+std::complex<double> compute_A_geometry(
   const Geometry& geom,
   const Eigen::Vector3d& k)
 {
@@ -143,19 +142,60 @@ std::complex<double> compute_A_geometry_cpu(
   
   if (geom.type == GEOM_TRIANGLE) {
     for (const auto& tri : geom.tris) {
-      A_total += compute_A_triangle_cpu(tri, k);
+      A_total += compute_A_triangle(tri, k);
     }
   } else if (geom.type == GEOM_DISK) {
     for (const auto& disk : geom.disks) {
-      A_total += compute_A_disk_cpu(disk, k);
+      A_total += compute_A_disk(disk, k);
     }
   } else if (geom.type == GEOM_GAUSSIAN) {
     for (const auto& gauss : geom.gaussians) {
-      A_total += compute_A_gaussian_cpu(gauss, k);
+      A_total += compute_A_gaussian(gauss, k);
     }
   }
   
   return A_total;
+}
+
+// ============================================================================
+// Exact Form Factor Formulas for Simple Shapes
+// ============================================================================
+
+// Exact form factor for unit cube centered at origin: F(k) = ∏_{i=x,y,z} sin(k_i/2) / (k_i/2)
+double exact_cube_form_factor(double kx, double ky, double kz) {
+  auto sinc = [](double x) {
+    if (std::abs(x) < 1e-4) 
+      return 1.0 - x * x / 6.0 + x * x * x * x / 120.0;
+    return std::sin(x) / x;
+  };
+  return sinc(0.5 * kx) * sinc(0.5 * ky) * sinc(0.5 * kz);
+}
+
+// Exact |A(k)|² for unit cube: |A(k)|² = |k|² |F(k)|²
+double exact_cube_Ak_squared(double kx, double ky, double kz) {
+  double k2 = kx*kx + ky*ky + kz*kz;
+  double F = exact_cube_form_factor(kx, ky, kz);
+  return k2 * F * F;
+}
+
+// Exact form factor for solid sphere of radius R: F_ball(k) = 4π (sin(kR) - kR cos(kR))/k³
+double exact_sphere_form_factor(double k, double R) {
+  if (std::abs(k) < 1e-4) {
+    // Limit as k->0: F_ball(0) = 4πR³/3
+    double R3 = R * R * R;
+    return 4.0 * M_PI * R3 / 3.0 * (1.0 - k * k * R * R / 10.0 + k * k * k * k * R * R * R * R / 280.0);
+  }
+  double kR = k * R;
+  double k3 = k * k * k;
+  double sin_kR = std::sin(kR);
+  double cos_kR = std::cos(kR);
+  return 4.0 * M_PI * (sin_kR - kR * cos_kR) / k3;
+}
+
+// Exact |A(k)|² for sphere: |A(k)|² = |k|² |F(k)|²
+double exact_sphere_Ak_squared(double k, double R) {
+  double F = exact_sphere_form_factor(k, R);
+  return k * k * F * F;
 }
 
 } // namespace PoIntInt

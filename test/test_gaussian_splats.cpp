@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include "compute_volume.hpp"
 #include "geometry/packing.hpp"
+#include "form_factor_helpers.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/gauss_legendre.hpp"
 #include "quadrature/kgrid.hpp"
@@ -22,25 +23,7 @@ using namespace PoIntInt;
 // Exact formulas for unit sphere (radius R = 1)
 // ============================================================================
 
-// Exact form factor for solid ball: F_ball(k) = 4π (sin(kR) - kR cos(kR))/k³
-// For unit sphere (R=1): F_ball(k) = 4π (sin(k) - k cos(k))/k³
-inline double exact_sphere_form_factor(double k) {
-  if (std::abs(k) < 1e-4) {
-    // Limit as k->0: F_ball(0) = 4πR³/3 = 4π/3 for R=1
-    return 4.0 * M_PI * (1.0 / 3.0 - k * k / 30.0 + k * k * k * k / 840.0);
-  }
-  double k3 = k * k * k;
-  double sin_k = std::sin(k);
-  double cos_k = std::cos(k);
-  return 4.0 * M_PI * (sin_k - k * cos_k) / k3;
-}
-
-// Exact |A(k)|² for sphere
-// A(k) = i k F(k), so |A(k)|² = |k|² |F(k)|²
-inline double exact_sphere_Ak_squared(double k) {
-  double F = exact_sphere_form_factor(k);
-  return k * k * F * F;
-}
+// Use exact formulas from form_factor_helpers
 
 // ============================================================================
 // Helper: Create unit sphere as Gaussian splats
@@ -93,46 +76,7 @@ void create_sphere_gaussians(
   }
 }
 
-// ============================================================================
-// CPU implementation of A_parallel(k) for Gaussian splats (for testing)
-// ============================================================================
-std::pair<double, double> compute_scalar_Ak_from_gaussians(
-  const std::vector<GaussianPacked>& gaussians,
-  const std::array<double, 3>& kdir,
-  double kmag)
-{
-  std::pair<double, double> A = {0.0, 0.0};
-  double kx = kmag * kdir[0];
-  double ky = kmag * kdir[1];
-  double kz = kmag * kdir[2];
-  
-  for (const auto& g : gaussians) {
-    if (g.sigma <= 0.0f || g.w < 0.0f) continue;
-    
-    // k·n
-    double kdir_dot_n = kdir[0] * g.n.x + kdir[1] * g.n.y + kdir[2] * g.n.z;
-    double k_dot_n = kmag * kdir_dot_n;
-    
-    // ||k_perp||^2 = ||k||^2 - (k·n)^2
-    double k_perp_sq = std::max(0.0, kmag * kmag - k_dot_n * k_dot_n);
-    
-    // S_gauss(k) = w * exp(-0.5 * sigma^2 * ||k_perp||^2)
-    double exp_arg = -0.5 * g.sigma * g.sigma * k_perp_sq;
-    double S_magnitude = g.w * std::exp(exp_arg);
-    
-    // A_parallel = (k·n)/|k| * S_gauss
-    double A_parallel_mag = (kmag < 1e-10) ? 0.0 : kdir_dot_n * S_magnitude;
-    
-    // k·c (phase)
-    double phase = kx * g.c.x + ky * g.c.y + kz * g.c.z;
-    
-    // e^{ik·c} * A_parallel
-    A.first += std::cos(phase) * A_parallel_mag;
-    A.second += std::sin(phase) * A_parallel_mag;
-  }
-  
-  return A;
-}
+// Use compute_A_geometry from form_factor_helpers instead of duplicate implementation
 
 // ============================================================================
 // Test 1: Compare computed form factor field from Gaussian splats to exact formula
@@ -169,12 +113,13 @@ bool test_gaussian_form_factor_field(const std::string& leb_file, int Nrad = 32)
     double kz = k_test.first[2] * k_test.second;
     double k_mag = std::sqrt(kx*kx + ky*ky + kz*kz);
     
-    // Compute A_parallel(k) from Gaussian splats
-    std::pair<double, double> A_gaussian = compute_scalar_Ak_from_gaussians(geom.gaussians, k_test.first, k_test.second);
-    double Ak2_gaussian = A_gaussian.first * A_gaussian.first + A_gaussian.second * A_gaussian.second;
+    // Compute A_parallel(k) from Gaussian splats using form_factor_helpers
+    Eigen::Vector3d k_vec(kx, ky, kz);
+    std::complex<double> A_complex = compute_A_geometry(geom, k_vec);
+    double Ak2_gaussian = std::norm(A_complex);  // |A|^2 = real^2 + imag^2
     
     // Exact |A(k)|² for sphere (depends only on |k|)
-    double Ak2_exact = exact_sphere_Ak_squared(k_mag);
+    double Ak2_exact = exact_sphere_Ak_squared(k_mag);  // From form_factor_helpers
     
     double rel_error = std::abs(Ak2_gaussian - Ak2_exact) / (std::abs(Ak2_exact) + 1e-10);
     
