@@ -97,10 +97,10 @@ __device__ __forceinline__ float2 E_prime(float z){
   if (az < threshold){
     // from series:
     // Re ≈ -(1/3) z + (1/30) z^3
-    // Im ≈  1/2  - (1/8) z^2 + (1/120) z^4
+    // Im ≈  1/2  - (1/8) z^2 + (1/144) z^4
     float z2 = z*z, z3 = z2*z, z4 = z2*z2;
     float real = -(1.0f/3.0f)*z + (1.0f/30.0f)*z3;
-    float imag =  0.5f - (1.0f/8.0f)*z2 + (1.0f/120.0f)*z4;
+    float imag =  0.5f - (1.0f/8.0f)*z2 + (1.0f/144.0f)*z4;
     return make_float2(real, imag);
   } else {
     float s,c; __sincosf(z, &s, &c);
@@ -113,23 +113,23 @@ __device__ __forceinline__ float2 E_prime(float z){
   }
 }
 
-// Phi(α,β) = 2i [E(β) - E(α)]/(β-α)  , with α≈β -> 2i E'(α)
+// Phi(α,β) = -2i [E(β) - E(α)]/(β-α)  , with α≈β -> -2i E'(α)
 __device__ __forceinline__ float2 Phi_ab(float alpha, float beta){
   float d = beta - alpha;
   float threshold = 1e-5f;
   if (fabsf(d) < threshold){
     float2 Ep = E_prime(0.5f*(alpha+beta));
-    // 2i * (Ep.re + i Ep.im) = 2i*Ep.re - 2*Ep.im
+    // -2i * (Ep.re + i Ep.im) = -2i*Ep.re + 2*Ep.im
     return make_float2(2.0f*Ep.y, -2.0f*Ep.x);
   } else {
     float2 Ea = E_func(alpha);
     float2 Eb = E_func(beta);
     // num = Eb - Ea
     float2 num = make_float2(Eb.x - Ea.x, Eb.y - Ea.y);
-    // 2i * num/d
+    // -2i * num/d
     float invd = 1.0f/d;
     float2 q = make_float2(num.x*invd, num.y*invd);
-    // 2i*q = (-2*q.y, 2*q.x)
+    // -2i*q = (2*q.y, -2*q.x)
     return make_float2(2.0f*q.y, -2.0f*q.x);
   }
 }

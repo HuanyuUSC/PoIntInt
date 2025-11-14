@@ -50,7 +50,7 @@ std::complex<double> compute_A_triangle(
     if (az < 1e-4) {
       double z2 = z * z, z3 = z2 * z, z4 = z2 * z2;
       double real = -z / 3.0 + z3 / 30.0;
-      double imag = 0.5 - z2 / 8.0 + z4 / 120.0;
+      double imag = 0.5 - z2 / 8.0 + z4 / 144.0;
       return std::complex<double>(real, imag);
     }
     double s = std::sin(z);
@@ -64,7 +64,7 @@ std::complex<double> compute_A_triangle(
   std::complex<double> phi;
   double d = beta - alpha;
   if (std::abs(d) < 1e-5) {
-    // Use derivative when alpha ≈ beta: Phi = 2i * E'((alpha+beta)/2)
+    // Use derivative when alpha ≈ beta: Phi = -2i * E'((alpha+beta)/2)
     std::complex<double> Ep = E_prime(0.5 * (alpha + beta));
     // Match CUDA: make_float2(2.0f*Ep.y, -2.0f*Ep.x)
     // where Ep.y = Ep.im, Ep.x = Ep.re

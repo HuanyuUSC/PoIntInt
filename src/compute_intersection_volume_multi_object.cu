@@ -83,7 +83,7 @@ __device__ __forceinline__ float2 E_prime(float z) {
   if (az < threshold) {
     float z2 = z*z, z3 = z2*z, z4 = z2*z2;
     float real = -(1.0f/3.0f)*z + (1.0f/30.0f)*z3;
-    float imag = 0.5f - (1.0f/8.0f)*z2 + (1.0f/120.0f)*z4;
+    float imag = 0.5f - (1.0f/8.0f)*z2 + (1.0f/144.0f)*z4;
     return make_float2(real, imag);
   } else {
     float s, c;
