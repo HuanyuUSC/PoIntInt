@@ -5,8 +5,9 @@
 #include <vector>
 #include "compute_volume_multi_object.hpp"
 #include "geometry/packing.hpp"
-#include "lebedev_io.hpp"
-#include "gauss_legendre.hpp"
+#include "quadrature/lebedev_io.hpp"
+#include "quadrature/gauss_legendre.hpp"
+#include "quadrature/kgrid.hpp"
 
 using namespace PoIntInt;
 

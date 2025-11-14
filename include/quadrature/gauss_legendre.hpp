@@ -52,3 +52,4 @@ gauss_legendre_interval(int n, double a, double b)
   }
   return {x,w};
 }
+

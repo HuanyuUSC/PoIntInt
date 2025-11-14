@@ -2,8 +2,9 @@
 #include <iostream>
 #include <numeric>
 #include <iomanip>
-#include "lebedev_io.hpp"
-#include "gauss_legendre.hpp"
+#include "quadrature/lebedev_io.hpp"
+#include "quadrature/gauss_legendre.hpp"
+#include "quadrature/kgrid.hpp"
 #include "compute_volume.hpp"
 #include "geometry/packing.hpp"
 #include <cmath>

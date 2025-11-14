@@ -8,7 +8,8 @@
 #include "dof/dof_helpers.hpp"
 #include "geometry/packing.hpp"
 #include "compute_volume.hpp"
-#include "lebedev_io.hpp"
+#include "quadrature/lebedev_io.hpp"
+#include "quadrature/kgrid.hpp"
 
 using namespace PoIntInt;
 

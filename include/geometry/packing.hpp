@@ -7,12 +7,6 @@
 
 namespace PoIntInt {
 
-// Build k-grid from Lebedev directions and weights
-KGrid build_kgrid(
-  const std::vector<std::array<double, 3>>& leb_dirs,
-  const std::vector<double>& leb_w,
-  int Nrad);
-
 // Pack triangle mesh into CUDA-friendly format
 std::vector<TriPacked> pack_tris(
   const Eigen::MatrixXd& V,

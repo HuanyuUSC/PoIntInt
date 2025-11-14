@@ -2,6 +2,7 @@
 #include "geometry/types.hpp"
 #include "geometry/geometry.hpp"
 #include "geometry/packing.hpp"
+#include "quadrature/kgrid.hpp"
 
 namespace PoIntInt {
 

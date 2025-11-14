@@ -40,11 +40,5 @@ enum GeometryType {
   GEOM_GAUSSIAN = 2
 };
 
-struct KGrid {
-  std::vector<std::array<float,3>> dirs; // unit dir
-  std::vector<float> kmag;               // k = tan t
-  std::vector<double> w;                 // full weight: (1/2π^2) * w_ang * w_rad * sec^2(t) (always double for accuracy)
-};
-
 } // namespace PoIntInt
 
