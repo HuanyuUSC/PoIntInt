@@ -13,15 +13,6 @@
 
 using namespace PoIntInt;
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-// Use create_sphere_pointcloud and create_sphere_gaussians from geometry/geometry_helpers.hpp
-// Use analytical intersection volume functions from analytical_intersection.hpp
-
-// Use create_unit_cube_mesh from geometry/geometry_helpers.hpp
-
 // Test: Multi-object intersection volume matrix
 bool test_multi_object_volume_matrix(const std::string& leb_file, int Nrad = 96) {
   std::cout << "\n=== Test: Multi-Object Volume Matrix ===" << std::endl;

@@ -16,20 +16,6 @@
 
 using namespace PoIntInt;
 
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
-
-// ============================================================================
-// Exact formulas for unit sphere (radius R = 1)
-// ============================================================================
-
-// Use exact formulas from form_factor_helpers
-
-// Use create_sphere_gaussians from geometry/geometry_helpers.hpp
-
-// Use compute_A_geometry from form_factor_helpers instead of duplicate implementation
-
 // ============================================================================
 // Test 1: Compare computed form factor field from Gaussian splats to exact formula
 // ============================================================================
