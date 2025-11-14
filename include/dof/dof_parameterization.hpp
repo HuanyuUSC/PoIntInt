@@ -1,5 +1,6 @@
 #pragma once
 #include "geometry/geometry.hpp"
+#include "form_factor_helpers.hpp"
 #include <Eigen/Dense>
 #include <memory>
 
@@ -14,6 +15,13 @@ struct DoFParameterization {
   
   // Apply transformation to geometry (returns transformed geometry)
   virtual Geometry apply(const Geometry& geom, const Eigen::VectorXd& dofs) const = 0;
+
+  virtual std::complex<double>
+    compute_A(const Geometry& geom, const Eigen::Vector3d& k,
+      const Eigen::VectorXd& dofs) const
+  {
+    return compute_A_geometry(apply(geom, dofs), k);
+  }
   
   // Compute gradient of form factor A(k) w.r.t. DoFs
   // Returns: dA/dθ for each DoF (complex vector of size num_dofs)
