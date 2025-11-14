@@ -6,6 +6,7 @@
 #include <array>
 #include <cassert>
 #include "compute_intersection_volume.hpp"
+#include "compute_volume.hpp"
 #include "geometry/packing.hpp"
 #include "geometry/geometry_helpers.hpp"
 #include "form_factor_helpers.hpp"
@@ -177,6 +178,72 @@ bool test_mesh_volume_computation(const std::string& leb_file, int Nrad = 96) {
 }
 
 // ============================================================================
+// Test 4: Volume from divergence theorem
+// ============================================================================
+bool test_volume_divergence_theorem(const std::string& leb_file, int Nrad = 96) {
+  std::cout << "\n=== Test 4: Volume from Divergence Theorem ===" << std::endl;
+  
+  // Create unit cube mesh
+  Eigen::MatrixXd V;
+  Eigen::MatrixXi F;
+  create_unit_cube_mesh(V, F);
+  auto geom = make_triangle_mesh(V, F);
+  
+  // Compute volume using divergence theorem
+  double volume_div = compute_volume_cuda(geom, 256, true);
+  
+  // Compute F(0) - form factor at k=0 should equal volume
+  // F(0) = ∫_Ω dx = V
+  // For a triangle mesh, we can compute this directly
+  Eigen::Vector3d k_zero(0.0, 0.0, 0.0);
+  std::complex<double> A_zero = compute_A_geometry(geom, k_zero);
+  // At k=0, A(0) = ∫_∂Ω n dS = 0 for closed surfaces
+  // But F(0) = volume, so we need to compute it differently
+  // Actually, for k=0, the form factor is just the volume
+  // We can compute it by summing signed volumes of tetrahedra
+  double volume_F0 = 0.0;
+  for (const auto& tri : geom.tris) {
+    Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
+    Eigen::Vector3d e1(tri.e1.x, tri.e1.y, tri.e1.z);
+    Eigen::Vector3d e2(tri.e2.x, tri.e2.y, tri.e2.z);
+    Eigen::Vector3d b = a + e1;
+    Eigen::Vector3d c = a + e2;
+    // Signed volume of tetrahedron (0, a, b, c) = (1/6) * a · (b × c)
+    double vol_tet = (1.0/6.0) * a.dot(e1.cross(e2));
+    volume_F0 += vol_tet;
+  }
+  
+  // Compute self-intersection volume
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
+  double volume_self = compute_intersection_volume_cuda(geom, geom, KG, 256, false);
+  
+  double volume_exact = 1.0;  // Unit cube volume
+  
+  std::cout << std::fixed << std::setprecision(10);
+  std::cout << "  Volume (divergence theorem): " << volume_div << std::endl;
+  std::cout << "  Volume (F(0) from tetrahedra): " << volume_F0 << std::endl;
+  std::cout << "  Volume (self-intersection): " << volume_self << std::endl;
+  std::cout << "  Exact volume: " << volume_exact << std::endl;
+  
+  double rel_error_div = std::abs(volume_div - volume_exact) / volume_exact;
+  double rel_error_F0 = std::abs(volume_F0 - volume_exact) / volume_exact;
+  double rel_error_self = std::abs(volume_self - volume_exact) / volume_exact;
+  double rel_error_div_vs_self = std::abs(volume_div - volume_self) / (0.5 * (volume_div + volume_self) + 1e-10);
+  
+  std::cout << std::scientific << std::setprecision(6);
+  std::cout << "  Rel error (div vs exact): " << rel_error_div << std::endl;
+  std::cout << "  Rel error (F0 vs exact): " << rel_error_F0 << std::endl;
+  std::cout << "  Rel error (self vs exact): " << rel_error_self << std::endl;
+  std::cout << "  Rel error (div vs self): " << rel_error_div_vs_self << std::endl;
+  
+  bool passed = (rel_error_div < 0.01) && (rel_error_F0 < 0.01) && 
+                (rel_error_self < 0.05) && (rel_error_div_vs_self < 0.05);
+  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  return passed;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 int main(int argc, char** argv) {
@@ -202,6 +269,9 @@ int main(int argc, char** argv) {
   
   // Test 3: Mesh-based volume computation
   all_passed &= test_mesh_volume_computation(leb_file, Nrad);
+  
+  // Test 4: Volume from divergence theorem
+  all_passed &= test_volume_divergence_theorem(leb_file, Nrad);
   
   std::cout << "\n=== Summary ===" << std::endl;
   if (all_passed) {

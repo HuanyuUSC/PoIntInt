@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cuda_runtime.h>
 #include "compute_intersection_volume.hpp"
+#include "compute_volume.hpp"
 #include "geometry/packing.hpp"
 #include "geometry/geometry_helpers.hpp"
 #include "form_factor_helpers.hpp"
@@ -228,6 +229,52 @@ bool test_mesh_pointcloud_intersection(const std::string& leb_file, int Nrad = 9
 }
 
 // ============================================================================
+// Test 5: Volume from divergence theorem
+// ============================================================================
+bool test_volume_divergence_theorem(const std::string& leb_file, int Nrad = 96) {
+  std::cout << "\n=== Test 5: Volume from Divergence Theorem ===" << std::endl;
+  
+  // Create unit sphere point cloud
+  Eigen::MatrixXd P, N;
+  Eigen::VectorXd radii;
+  create_sphere_pointcloud(P, N, radii, 2000);
+  auto geom = make_point_cloud(P, N, radii);
+  
+  // Compute volume using divergence theorem
+  double volume_div = compute_volume_cuda(geom, 256, true);
+  
+  // Compute F(0) - for a sphere, F(0) = (4π/3) * R³
+  double R = 1.0;  // Unit sphere
+  double volume_F0 = (4.0 * M_PI / 3.0) * R * R * R;
+  
+  // Compute self-intersection volume
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
+  double volume_self = compute_intersection_volume_cuda(geom, geom, KG, 256, false);
+  
+  double volume_exact = volume_F0;
+  
+  std::cout << std::fixed << std::setprecision(10);
+  std::cout << "  Volume (divergence theorem): " << volume_div << std::endl;
+  std::cout << "  Volume (F(0) = 4πR³/3): " << volume_F0 << std::endl;
+  std::cout << "  Volume (self-intersection): " << volume_self << std::endl;
+  std::cout << "  Exact volume: " << volume_exact << std::endl;
+  
+  double rel_error_div = std::abs(volume_div - volume_exact) / volume_exact;
+  double rel_error_self = std::abs(volume_self - volume_exact) / volume_exact;
+  double rel_error_div_vs_self = std::abs(volume_div - volume_self) / (0.5 * (volume_div + volume_self) + 1e-10);
+  
+  std::cout << std::scientific << std::setprecision(6);
+  std::cout << "  Rel error (div vs exact): " << rel_error_div << std::endl;
+  std::cout << "  Rel error (self vs exact): " << rel_error_self << std::endl;
+  std::cout << "  Rel error (div vs self): " << rel_error_div_vs_self << std::endl;
+  
+  bool passed = (rel_error_div < 0.1) && (rel_error_self < 0.1) && (rel_error_div_vs_self < 0.1);
+  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  return passed;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 int main(int argc, char** argv) {
@@ -256,6 +303,9 @@ int main(int argc, char** argv) {
   
   // Test 4: Mesh-point cloud intersection
   all_passed &= test_mesh_pointcloud_intersection(leb_file, Nrad);
+  
+  // Test 5: Volume from divergence theorem
+  all_passed &= test_volume_divergence_theorem(leb_file, Nrad);
   
   std::cout << "\n=== Summary ===" << std::endl;
   if (all_passed) {
