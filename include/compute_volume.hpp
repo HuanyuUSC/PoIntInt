@@ -11,5 +11,9 @@ double compute_volume_cuda(
   int blockSize = 256,
   bool enable_profiling = false);
 
+// CPU version of volume computation (for testing/debugging)
+// Uses the same formula as the CUDA version but computed on CPU
+double compute_volume_cpu(const Geometry& geom);
+
 } // namespace PoIntInt
 
