@@ -188,7 +188,17 @@ if(BUILD_TESTS)
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "test"
     )
-  endif()  
+  endif()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_dof_parameterization.cpp")
+    add_executable(poIntInt_test_differentiability test/test_dof_parameterization.cpp)
+    target_link_libraries(poIntInt_test_differentiability PRIVATE poIntInt_core)
+    set_target_properties(poIntInt_test_differentiability PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+      FOLDER "test"
+    )
+  endif()
 endif()
 
 # ---- Status Output ----
