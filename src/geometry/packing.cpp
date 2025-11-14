@@ -1,5 +1,5 @@
-#include "geometry_packing.hpp"
-#include "geometry.hpp"
+#include "geometry/packing.hpp"
+#include "geometry/geometry.hpp"
 #include "gauss_legendre.hpp"
 #include <cmath>
 #include <cassert>

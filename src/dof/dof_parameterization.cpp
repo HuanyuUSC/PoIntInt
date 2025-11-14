@@ -1,5 +1,5 @@
 #include "dof/dof_helpers.hpp"
-#include "geometry_packing.hpp"
+#include "geometry/packing.hpp"
 #include <cmath>
 #include <complex>
 

@@ -9,8 +9,8 @@
 #include <iomanip>
 #include <math_constants.h>
 #include "compute_volume_multi_object.hpp"
-#include "geometry.hpp"
-#include "geometry_types.hpp"
+#include "geometry/geometry.hpp"
+#include "geometry/types.hpp"
 
 // Reuse utility functions from compute_volume.cu
 // (In a real implementation, these would be in a shared header)

@@ -5,7 +5,7 @@
 #include "lebedev_io.hpp"
 #include "gauss_legendre.hpp"
 #include "compute_volume.hpp"
-#include "geometry_packing.hpp"
+#include "geometry/packing.hpp"
 #include <cmath>
 #include <corecrt_math_defines.h>
 #include <igl/readOFF.h>

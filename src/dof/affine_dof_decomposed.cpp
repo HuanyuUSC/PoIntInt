@@ -1,6 +1,6 @@
 #include "dof/affine_dof_decomposed.hpp"
 #include "dof/dof_helpers.hpp"
-#include "geometry_packing.hpp"
+#include "geometry/packing.hpp"
 #include <cuda_runtime.h>
 #include <cassert>
 #include <cmath>

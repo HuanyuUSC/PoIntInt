@@ -1,5 +1,5 @@
 #pragma once
-#include "geometry_types.hpp"
+#include "geometry/types.hpp"
 #include <vector>
 
 namespace PoIntInt {

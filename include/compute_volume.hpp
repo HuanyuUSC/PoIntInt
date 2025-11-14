@@ -1,7 +1,7 @@
 #pragma once
-#include "geometry_types.hpp"
-#include "geometry.hpp"
-#include "geometry_packing.hpp"
+#include "geometry/types.hpp"
+#include "geometry/geometry.hpp"
+#include "geometry/packing.hpp"
 
 namespace PoIntInt {
 

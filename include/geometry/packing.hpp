@@ -2,8 +2,8 @@
 #include <vector>
 #include <array>
 #include <Eigen/Dense>
-#include "geometry_types.hpp"
-#include "geometry.hpp"
+#include "geometry/types.hpp"
+#include "geometry/geometry.hpp"
 
 namespace PoIntInt {
 

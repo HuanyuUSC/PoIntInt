@@ -1,6 +1,6 @@
 #pragma once
-#include "../geometry.hpp"
-#include "../geometry_types.hpp"
+#include "geometry/geometry.hpp"
+#include "geometry/types.hpp"
 #include <Eigen/Dense>
 #include <complex>
 

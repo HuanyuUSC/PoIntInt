@@ -1,5 +1,5 @@
 #pragma once
-#include "../geometry.hpp"
+#include "geometry/geometry.hpp"
 #include <Eigen/Dense>
 #include <memory>
 

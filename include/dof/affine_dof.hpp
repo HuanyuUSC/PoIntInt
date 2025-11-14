@@ -1,6 +1,6 @@
 #pragma once
 #include "dof_parameterization.hpp"
-#include "../geometry.hpp"
+#include "geometry/geometry.hpp"
 #include <Eigen/Dense>
 
 namespace PoIntInt {

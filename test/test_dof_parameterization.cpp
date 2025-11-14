@@ -6,7 +6,7 @@
 #include <complex>
 #include "dof/affine_dof.hpp"
 #include "dof/dof_helpers.hpp"
-#include "geometry_packing.hpp"
+#include "geometry/packing.hpp"
 #include "compute_volume.hpp"
 #include "lebedev_io.hpp"
 

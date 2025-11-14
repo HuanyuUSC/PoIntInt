@@ -7,7 +7,7 @@
 #include <cassert>
 #include <cuda_runtime.h>
 #include "compute_volume.hpp"
-#include "geometry_packing.hpp"
+#include "geometry/packing.hpp"
 #include "lebedev_io.hpp"
 #include "gauss_legendre.hpp"
 

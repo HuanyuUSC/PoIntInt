@@ -9,8 +9,8 @@
 #include <iomanip>
 #include <math_constants.h>
 #include "compute_volume.hpp"
-#include "geometry.hpp"
-#include "geometry_types.hpp"
+#include "geometry/geometry.hpp"
+#include "geometry/types.hpp"
 
 // ===================== utilities =====================
 

@@ -4,7 +4,7 @@
 #include <cmath>
 #include <vector>
 #include "compute_volume_multi_object.hpp"
-#include "geometry_packing.hpp"
+#include "geometry/packing.hpp"
 #include "lebedev_io.hpp"
 #include "gauss_legendre.hpp"
 
