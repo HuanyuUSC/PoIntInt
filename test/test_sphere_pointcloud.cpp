@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include "compute_volume.hpp"
 #include "geometry/packing.hpp"
+#include "geometry/geometry_helpers.hpp"
 #include "form_factor_helpers.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/gauss_legendre.hpp"
@@ -25,47 +26,7 @@ using namespace PoIntInt;
 
 // Use exact formulas from form_factor_helpers
 
-// ============================================================================
-// Helper: Create unit sphere as oriented point cloud
-// ============================================================================
-void create_sphere_pointcloud(
-  Eigen::MatrixXd& P,  // positions
-  Eigen::MatrixXd& N,  // normals (outward pointing)
-  Eigen::VectorXd& radii,
-  int n_points = 1000)
-{
-  // Generate points on unit sphere surface with uniform distribution
-  // Using Fibonacci sphere algorithm for uniform distribution
-  P.resize(n_points, 3);
-  N.resize(n_points, 3);
-  radii.resize(n_points);
-  
-  const double golden_angle = M_PI * (3.0 - std::sqrt(5.0));  // Golden angle in radians
-  
-  for (int i = 0; i < n_points; ++i) {
-    double y = 1.0 - (2.0 * i) / (n_points - 1.0);  // y goes from 1 to -1
-    double radius_at_y = std::sqrt(1.0 - y * y);  // radius at height y
-    double theta = golden_angle * i;
-    
-    double x = radius_at_y * std::cos(theta);
-    double z = radius_at_y * std::sin(theta);
-    
-    // Position on unit sphere
-    P(i, 0) = x;
-    P(i, 1) = y;
-    P(i, 2) = z;
-    
-    // Normal (outward pointing, same as position for unit sphere)
-    N(i, 0) = x;
-    N(i, 1) = y;
-    N(i, 2) = z;
-    
-    // Radius for each disk - choose to cover surface uniformly
-    // Total surface area = 4π, so each disk should have area ≈ 4π/n_points
-    double disk_area = 4.0 * M_PI / n_points;
-    radii(i) = std::sqrt(disk_area / M_PI);
-  }
-}
+// Use create_sphere_pointcloud from geometry/geometry_helpers.hpp
 
 // Use compute_A_geometry from form_factor_helpers instead of duplicate implementation
 

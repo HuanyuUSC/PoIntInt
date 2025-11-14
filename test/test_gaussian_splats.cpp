@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 #include "compute_volume.hpp"
 #include "geometry/packing.hpp"
+#include "geometry/geometry_helpers.hpp"
 #include "form_factor_helpers.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/gauss_legendre.hpp"
@@ -25,56 +26,7 @@ using namespace PoIntInt;
 
 // Use exact formulas from form_factor_helpers
 
-// ============================================================================
-// Helper: Create unit sphere as Gaussian splats
-// ============================================================================
-void create_sphere_gaussians(
-  Eigen::MatrixXd& P,  // positions
-  Eigen::MatrixXd& N,  // normals (outward pointing)
-  Eigen::VectorXd& sigmas,  // standard deviations in tangent plane
-  Eigen::VectorXd& weights,  // area weights
-  int n_points = 1000)
-{
-  // Generate points on unit sphere surface with uniform distribution
-  // Using Fibonacci sphere algorithm for uniform distribution
-  P.resize(n_points, 3);
-  N.resize(n_points, 3);
-  sigmas.resize(n_points);
-  weights.resize(n_points);
-  
-  const double golden_angle = M_PI * (3.0 - std::sqrt(5.0));  // Golden angle in radians
-  
-  for (int i = 0; i < n_points; ++i) {
-    double y = 1.0 - (2.0 * i) / (n_points - 1.0);  // y goes from 1 to -1
-    double radius_at_y = std::sqrt(1.0 - y * y);  // radius at height y
-    double theta = golden_angle * i;
-    
-    double x = radius_at_y * std::cos(theta);
-    double z = radius_at_y * std::sin(theta);
-    
-    // Position on unit sphere
-    P(i, 0) = x;
-    P(i, 1) = y;
-    P(i, 2) = z;
-    
-    // Normal (outward pointing, same as position for unit sphere)
-    N(i, 0) = x;
-    N(i, 1) = y;
-    N(i, 2) = z;
-    
-    // Total surface area = 4π, so each Gaussian should have weight ≈ 4π/n_points
-    double weight = 4.0 * M_PI / n_points;
-    weights(i) = weight;
-    
-    // Choose sigma such that the Gaussian footprint covers approximately the same area
-    // For a Gaussian with std dev sigma, the effective radius is about 2*sigma
-    // We want the area covered to be approximately weight, so:
-    // π * (2*sigma)^2 ≈ weight, so sigma ≈ sqrt(weight/(4π))
-    // But we can also use a fixed fraction of the sphere radius
-    double sigma = std::sqrt(weight / (4.0 * M_PI));  // Approximately sqrt(1/n_points)
-    sigmas(i) = sigma;
-  }
-}
+// Use create_sphere_gaussians from geometry/geometry_helpers.hpp
 
 // Use compute_A_geometry from form_factor_helpers instead of duplicate implementation
 

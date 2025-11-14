@@ -7,6 +7,7 @@
 #include <cassert>
 #include "compute_volume.hpp"
 #include "geometry/packing.hpp"
+#include "geometry/geometry_helpers.hpp"
 #include "form_factor_helpers.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/gauss_legendre.hpp"
@@ -24,32 +25,7 @@ using namespace PoIntInt;
 
 // Use exact formulas from form_factor_helpers
 
-// ============================================================================
-// Helper: Create unit cube mesh centered at origin [-1/2, 1/2]^3
-// ============================================================================
-void create_unit_cube_mesh(Eigen::MatrixXd& V, Eigen::MatrixXi& F) {
-  V.resize(8, 3);
-  // Vertices of cube [-1/2, 1/2]^3
-  V <<
-    -0.5, -0.5, -0.5,   // 0
-     0.5, -0.5, -0.5,   // 1
-     0.5,  0.5, -0.5,   // 2
-    -0.5,  0.5, -0.5,   // 3
-    -0.5, -0.5,  0.5,   // 4
-     0.5, -0.5,  0.5,   // 5
-     0.5,  0.5,  0.5,   // 6
-    -0.5,  0.5,  0.5;   // 7
-  
-  F.resize(12, 3);
-  // Faces (two triangles per face), outward orientation
-  F <<
-    0, 2, 1,  0, 3, 2,   // z = -0.5 (bottom)
-    4, 5, 6,  4, 6, 7,   // z =  0.5 (top)
-    0, 1, 5,  0, 5, 4,   // y = -0.5 (front)
-    2, 7, 6,  2, 3, 7,   // y =  0.5 (back)
-    0, 4, 7,  0, 7, 3,   // x = -0.5 (left)
-    1, 6, 5,  1, 2, 6;   // x =  0.5 (right)
-}
+// Use create_unit_cube_mesh from geometry/geometry_helpers.hpp
 
 // Use compute_A_geometry from form_factor_helpers instead of duplicate implementation
 
