@@ -30,23 +30,52 @@ std::complex<double> compute_A_triangle(
   double beta = k.dot(e2);
   double gamma = k.dot(S) / kmag;  // (k·S)/|k|
   
-  // Compute Phi_ab(alpha, beta) = J_triangle
-  auto sinc = [](double x) -> std::complex<double> {
-    if (std::abs(x) < 1e-4) {
-      return std::complex<double>(1.0 - x*x/6.0, -x/2.0);
+  // Compute Phi_ab(alpha, beta) = 2i [E(β) - E(α)]/(β-α)
+  // where E(z) = (e^(iz) - 1)/(iz) = sinc(z)
+  auto E_func = [](double z) -> std::complex<double> {
+    double az = std::abs(z);
+    if (az < 1e-4) {
+      double z2 = z * z, z4 = z2 * z2;
+      double real = 1.0 - z2 / 6.0 + z4 / 120.0;
+      double imag = z * 0.5 - z * z2 / 24.0 + z4 * z / 720.0;
+      return std::complex<double>(real, imag);
     }
-    return (std::exp(std::complex<double>(0.0, x)) - 1.0) / std::complex<double>(0.0, x);
+    double s = std::sin(z);
+    double c = std::cos(z);
+    return std::complex<double>(s / z, (1.0 - c) / z);
+  };
+  
+  auto E_prime = [](double z) -> std::complex<double> {
+    double az = std::abs(z);
+    if (az < 1e-4) {
+      double z2 = z * z, z3 = z2 * z, z4 = z2 * z2;
+      double real = -z / 3.0 + z3 / 30.0;
+      double imag = 0.5 - z2 / 8.0 + z4 / 120.0;
+      return std::complex<double>(real, imag);
+    }
+    double s = std::sin(z);
+    double c = std::cos(z);
+    double z2 = z * z;
+    double re = (z * c - s) / z2;
+    double im = (z * s - (1.0 - c)) / z2;
+    return std::complex<double>(re, im);
   };
   
   std::complex<double> phi;
-  if (std::abs(alpha - beta) < 1e-6 && std::abs(alpha) < 1e-6) {
-    // Degenerate case
-    phi = std::complex<double>(0.5, 0.0);
+  double d = beta - alpha;
+  if (std::abs(d) < 1e-5) {
+    // Use derivative when alpha ≈ beta: Phi = 2i * E'((alpha+beta)/2)
+    std::complex<double> Ep = E_prime(0.5 * (alpha + beta));
+    // Match CUDA: make_float2(2.0f*Ep.y, -2.0f*Ep.x)
+    // where Ep.y = Ep.im, Ep.x = Ep.re
+    phi = std::complex<double>(2.0 * Ep.imag(), -2.0 * Ep.real());
   } else {
-    std::complex<double> sinc_alpha = sinc(alpha);
-    std::complex<double> sinc_beta = sinc(beta);
-    std::complex<double> sinc_diff = sinc(alpha - beta);
-    phi = (sinc_beta * sinc_diff - sinc_alpha) / std::complex<double>(0.0, beta);
+    std::complex<double> Ea = E_func(alpha);
+    std::complex<double> Eb = E_func(beta);
+    std::complex<double> diff = Eb - Ea;
+    // Match CUDA: make_float2(2.0f*q.y, -2.0f*q.x) where q = diff/d
+    // q.y = diff.im/d, q.x = diff.re/d
+    phi = std::complex<double>(2.0 * diff.imag() / d, -2.0 * diff.real() / d);
   }
   
   std::complex<double> phase = std::exp(std::complex<double>(0.0, k.dot(a)));
