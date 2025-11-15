@@ -5,6 +5,9 @@
 #include <chrono>
 #include <iostream>
 #include <iomanip>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
+#include <functional>
 #include "compute_volume.hpp"
 #include "geometry/geometry.hpp"
 #include "geometry/types.hpp"
@@ -235,45 +238,69 @@ double compute_volume_cuda(
 }
 
 double compute_volume_cpu(const Geometry& geom) {
-  double volume = 0.0;
+  double volume_sum = 0.0;
   
   if (geom.type == GEOM_TRIANGLE) {
     // For triangles: V = (1/3) * Σ_triangles (a · S)
     // where a is the first vertex and S is the oriented area vector
-    for (const auto& tri : geom.tris) {
-      double contrib = (double)tri.a.x * (double)tri.S.x + 
-                       (double)tri.a.y * (double)tri.S.y + 
-                       (double)tri.a.z * (double)tri.S.z;
-      volume += contrib;
-    }
-    volume /= 3.0;
+    volume_sum = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.tris.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& tri = geom.tris[i];
+          double contrib = (double)tri.a.x * (double)tri.S.x + 
+                           (double)tri.a.y * (double)tri.S.y + 
+                           (double)tri.a.z * (double)tri.S.z;
+          local_sum += contrib;
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    volume_sum /= 3.0;
   } else if (geom.type == GEOM_DISK) {
     // For disks: V = (1/3) * Σ_disks ((c · n) * area)
     // where c is the center, n is the normal, and area is the disk area
-    for (const auto& disk : geom.disks) {
-      if (disk.rho > 0.0f && disk.area >= 0.0f) {
-        double contrib = ((double)disk.c.x * (double)disk.n.x + 
-                         (double)disk.c.y * (double)disk.n.y + 
-                         (double)disk.c.z * (double)disk.n.z) * (double)disk.area;
-        volume += contrib;
-      }
-    }
-    volume /= 3.0;
+    volume_sum = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.disks.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& disk = geom.disks[i];
+          if (disk.rho > 0.0f && disk.area >= 0.0f) {
+            double contrib = ((double)disk.c.x * (double)disk.n.x + 
+                             (double)disk.c.y * (double)disk.n.y + 
+                             (double)disk.c.z * (double)disk.n.z) * (double)disk.area;
+            local_sum += contrib;
+          }
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    volume_sum /= 3.0;
   } else if (geom.type == GEOM_GAUSSIAN) {
     // For Gaussian splats: V = (1/3) * Σ_gaussians ((c · n) * w)
     // where c is the center, n is the normal, and w is the weight
-    for (const auto& gauss : geom.gaussians) {
-      if (gauss.sigma > 0.0f && gauss.w >= 0.0f) {
-        double contrib = ((double)gauss.c.x * (double)gauss.n.x + 
-                         (double)gauss.c.y * (double)gauss.n.y + 
-                         (double)gauss.c.z * (double)gauss.n.z) * (double)gauss.w;
-        volume += contrib;
-      }
-    }
-    volume /= 3.0;
+    volume_sum = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.gaussians.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& gauss = geom.gaussians[i];
+          if (gauss.sigma > 0.0f && gauss.w >= 0.0f) {
+            double contrib = ((double)gauss.c.x * (double)gauss.n.x + 
+                             (double)gauss.c.y * (double)gauss.n.y + 
+                             (double)gauss.c.z * (double)gauss.n.z) * (double)gauss.w;
+            local_sum += contrib;
+          }
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    volume_sum /= 3.0;
   }
   
-  return volume;
+  return volume_sum;
 }
 
 } // namespace PoIntInt
