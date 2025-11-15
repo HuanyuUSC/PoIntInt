@@ -264,6 +264,26 @@ if(BUILD_TESTS)
     )
     copy_tbb_dlls(poIntInt_test_differentiability)
   endif()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_intersection_volume_gradient.cpp")
+    # Configure header file with source directory path
+    configure_file(
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_config.h.in"
+      "${CMAKE_CURRENT_BINARY_DIR}/test_config.h"
+      @ONLY
+    )
+    add_executable(poIntInt_test_intersection_volume_gradient test/test_intersection_volume_gradient.cpp)
+    target_link_libraries(poIntInt_test_intersection_volume_gradient PRIVATE poIntInt_core)
+    # Add include directory for generated config header
+    target_include_directories(poIntInt_test_intersection_volume_gradient PRIVATE 
+      "${CMAKE_CURRENT_BINARY_DIR}")
+    set_target_properties(poIntInt_test_intersection_volume_gradient PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+      FOLDER "test"
+    )
+    copy_tbb_dlls(poIntInt_test_intersection_volume_gradient)
+  endif()
 endif()
 
 # ---- Status Output ----
