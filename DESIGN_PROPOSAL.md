@@ -165,29 +165,51 @@ enum class ComputationFlags {
   ALL = VOLUME_ONLY | GRADIENT | HESSIAN
 };
 
-// Result structure for unified computation (used for both intersection and self-volume)
+// Result structure for self-volume computation (single geometry)
 struct VolumeResult {
-  double volume;  // Volume (intersection volume or self-volume)
+  double volume;  // Self-volume
   
   // Gradients (only computed if requested)
-  Eigen::VectorXd grad_geom1;  // Gradient w.r.t. DoFs of geometry 1 (or single geometry for self-volume)
-  Eigen::VectorXd grad_geom2;  // Gradient w.r.t. DoFs of geometry 2 (empty for self-volume)
+  Eigen::VectorXd grad;  // Gradient w.r.t. DoFs of the geometry
+  
+  // Hessians (only computed if requested, Gauss-Newton approximation)
+  // Note: Gauss-Newton Hessian for self-volume is approximated as:
+  //   H ≈ Σ_q w_q · (∂A(k_q)/∂θ) · (∂A(k_q)/∂θ)^T
+  // This does NOT require second derivatives d²A/dθ²
+  Eigen::MatrixXd hessian;  // Hessian w.r.t. DoFs of the geometry
+  
+  // Optional: Future support for full Hessian (requires d²A/dθ²)
+  // This is left as a placeholder for future improvements
+  // Eigen::MatrixXd hessian_full;  // Full Hessian if compute_A_hessian() is implemented
+};
+
+// Result structure for intersection volume computation (two geometries)
+struct IntersectionVolumeResult {
+  double volume;  // Intersection volume
+  
+  // Gradients (only computed if requested)
+  Eigen::VectorXd grad_geom1;  // Gradient w.r.t. DoFs of geometry 1
+  Eigen::VectorXd grad_geom2;  // Gradient w.r.t. DoFs of geometry 2
   
   // Hessians (only computed if requested, Gauss-Newton approximation)
   // Note: Gauss-Newton Hessian is approximated as sum of outer products of gradients:
-  //   H ≈ Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₂(k_q)/∂θ₂)^T
+  //   H₁₁ ≈ Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₁(k_q)/∂θ₁)^T
+  //   H₂₂ ≈ Σ_q w_q · (∂A₂(k_q)/∂θ₂) · (∂A₂(k_q)/∂θ₂)^T
+  //   H₁₂ ≈ Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₂(k_q)/∂θ₂)^T
   // This does NOT require second derivatives d²A/dθ²
-  Eigen::MatrixXd hessian_geom1;  // Hessian w.r.t. DoFs of geometry 1 (or single geometry for self-volume)
-  Eigen::MatrixXd hessian_geom2;  // Hessian w.r.t. DoFs of geometry 2 (empty for self-volume)
-  Eigen::MatrixXd hessian_cross;  // Cross-term Hessian (∂²V/∂θ₁∂θ₂, empty for self-volume)
+  Eigen::MatrixXd hessian_geom1;  // Hessian w.r.t. DoFs of geometry 1
+  Eigen::MatrixXd hessian_geom2;  // Hessian w.r.t. DoFs of geometry 2
+  Eigen::MatrixXd hessian_cross;  // Cross-term Hessian (∂²V/∂θ₁∂θ₂)
   
   // Optional: Future support for full Hessian (requires d²A/dθ²)
   // This is left as a placeholder for future improvements
   // Eigen::MatrixXd hessian_full_geom1;  // Full Hessian if compute_A_hessian() is implemented
+  // Eigen::MatrixXd hessian_full_geom2;  // Full Hessian if compute_A_hessian() is implemented
+  // Eigen::MatrixXd hessian_full_cross;  // Full cross-term Hessian
 };
 
 // Unified scalar intersection volume interface (with DoF)
-VolumeResult compute_intersection_volume_unified_cuda(
+IntersectionVolumeResult compute_intersection_volume_unified_cuda(
   const Geometry& ref_geom1,  // Reference geometry 1
   const Geometry& ref_geom2,  // Reference geometry 2
   const std::shared_ptr<DoFParameterization>& dof1,  // DoF for geometry 1
@@ -279,7 +301,7 @@ double compute_volume_cuda(
 );
 
 // CPU/TBB versions (same interface, different suffix)
-VolumeResult compute_intersection_volume_unified_cpu(
+IntersectionVolumeResult compute_intersection_volume_unified_cpu(
   const Geometry& ref_geom1,
   const Geometry& ref_geom2,
   const std::shared_ptr<DoFParameterization>& dof1,
@@ -535,9 +557,17 @@ struct IntersectionVolumeMatrixResult {
 ∂V/∂θ₂ = (1/(8π³)) · Σ_q w_q · Re( A₁(k_q) · conj(∂A₂(k_q)/∂θ₂) )
 ```
 
-**Gauss-Newton Hessian Approximation**:
+**Gauss-Newton Hessian Approximation for Intersection Volume**:
 ```
-H ≈ (1/(8π³)) · Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₂(k_q)/∂θ₂)^T
+H₁₁ ≈ (1/(8π³)) · Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₁(k_q)/∂θ₁)^T
+H₂₂ ≈ (1/(8π³)) · Σ_q w_q · (∂A₂(k_q)/∂θ₂) · (∂A₂(k_q)/∂θ₂)^T
+H₁₂ ≈ (1/(8π³)) · Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₂(k_q)/∂θ₂)^T
+```
+Note: This approximation uses only first derivatives and does NOT require `d²A/dθ²`.
+
+**Gauss-Newton Hessian Approximation for Self-Volume**:
+```
+H ≈ (1/(8π³)) · Σ_q w_q · (∂A(k_q)/∂θ) · (∂A(k_q)/∂θ)^T
 ```
 Note: This approximation uses only first derivatives and does NOT require `d²A/dθ²`.
 
@@ -547,14 +577,14 @@ Note: This approximation uses only first derivatives and does NOT require `d²A/
    __global__ void compute_intersection_volume_gradient_kernel(
      const GeometryData* geom1,
      const GeometryData* geom2,
-     const float3* kdirs,
-     const float* kmags,
+     const double3* kdirs,
+     const double* kmags,
      const double* weights,
      int Q,
-     const float2* d_grad_A1,  // Precomputed: ∂A₁(k_q)/∂θ₁ for all q
-     const float2* d_grad_A2,  // Precomputed: ∂A₂(k_q)/∂θ₂ for all q
-     const float2* d_A1,       // Precomputed: A₁(k_q) for all q
-     const float2* d_A2,       // Precomputed: A₂(k_q) for all q
+     const double2* d_grad_A1,  // Precomputed: ∂A₁(k_q)/∂θ₁ for all q
+     const double2* d_grad_A2,  // Precomputed: ∂A₂(k_q)/∂θ₂ for all q
+     const double2* d_A1,       // Precomputed: A₁(k_q) for all q
+     const double2* d_A2,       // Precomputed: A₂(k_q) for all q
      int num_dofs1,
      int num_dofs2,
      double* d_grad_V1,        // Output: ∂V/∂θ₁
@@ -564,20 +594,19 @@ Note: This approximation uses only first derivatives and does NOT require `d²A/
 
 2. **Host Interface**:
    ```cpp
-   struct IntersectionVolumeGradientResult {
-     Eigen::VectorXd grad_geom1;  // Gradient w.r.t. DoFs of geometry 1
-     Eigen::VectorXd grad_geom2;  // Gradient w.r.t. DoFs of geometry 2
-   };
+   // Note: This is now part of IntersectionVolumeResult (see unified interface above)
+   // The gradient computation returns IntersectionVolumeResult with gradients populated
    
-   IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
-     const Geometry& geom1,
-     const Geometry& geom2,
+   IntersectionVolumeResult compute_intersection_volume_gradient_cuda(
+     const Geometry& ref_geom1,
+     const Geometry& ref_geom2,
      const std::shared_ptr<DoFParameterization>& dof1,
      const std::shared_ptr<DoFParameterization>& dof2,
      const Eigen::VectorXd& dofs1,
      const Eigen::VectorXd& dofs2,
      const KGrid& kgrid,
-     int blockSize = 256
+     int blockSize = 256,
+     bool enable_profiling = false
    );
    ```
 
@@ -1046,7 +1075,7 @@ auto self_vol_result = compute_volume_unified_cuda(
   ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT
 );
 std::cout << "Self-volume: " << self_vol_result.volume << std::endl;
-std::cout << "Gradient w.r.t. DoFs: " << self_vol_result.grad_geom1.transpose() << std::endl;
+std::cout << "Gradient w.r.t. DoFs: " << self_vol_result.grad.transpose() << std::endl;
 
 // Self-volume without DoF (convenience wrapper)
 double self_vol_simple = compute_volume_cuda(ref_geom1, kgrid);
