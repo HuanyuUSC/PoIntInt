@@ -172,16 +172,38 @@ struct VolumeResult {
   // Gradients (only computed if requested)
   Eigen::VectorXd grad;  // Gradient w.r.t. DoFs of the geometry
   
-  // Hessians (only computed if requested, Gauss-Newton approximation)
-  // Note: Gauss-Newton Hessian for self-volume is approximated as:
-  //   H ≈ Σ_q w_q · (∂A(k_q)/∂θ) · (∂A(k_q)/∂θ)^T
-  // This does NOT require second derivatives d²A/dθ²
+  // Hessians (only computed if requested)
   Eigen::MatrixXd hessian;  // Hessian w.r.t. DoFs of the geometry
-  
-  // Optional: Future support for full Hessian (requires d²A/dθ²)
-  // This is left as a placeholder for future improvements
-  // Eigen::MatrixXd hessian_full;  // Full Hessian if compute_A_hessian() is implemented
 };
+
+// Self-volume computation (divergence theorem) - returns VolumeResult with gradient/Hessian support
+VolumeResult compute_volume_unified_cuda(
+  const Geometry& ref_geom,
+  const std::shared_ptr<DoFParameterization>& dof,
+  const Eigen::VectorXd& dofs,
+  const KGrid& kgrid,
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  int blockSize = 256,
+  bool enable_profiling = false
+);
+
+// Convenience: no DoF (uses identity AffineDoF)
+double compute_volume_cuda(
+  const Geometry& geom,
+  const KGrid& kgrid,
+  int blockSize = 256,
+  bool enable_profiling = false
+);
+
+// CPU/TBB versions (same interface, different suffix)
+VolumeResult compute_volume_unified_cpu(
+  const Geometry& ref_geom,
+  const std::shared_ptr<DoFParameterization>& dof,
+  const Eigen::VectorXd& dofs,
+  const KGrid& kgrid,
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  bool enable_profiling = false
+);
 
 // Result structure for intersection volume computation (two geometries)
 struct IntersectionVolumeResult {
@@ -244,6 +266,19 @@ double compute_intersection_volume_cuda(
   bool enable_profiling = false
 );
 
+// CPU/TBB versions (same interface, different suffix)
+IntersectionVolumeResult compute_intersection_volume_unified_cpu(
+  const Geometry& ref_geom1,
+  const Geometry& ref_geom2,
+  const std::shared_ptr<DoFParameterization>& dof1,
+  const std::shared_ptr<DoFParameterization>& dof2,
+  const Eigen::VectorXd& dofs1,
+  const Eigen::VectorXd& dofs2,
+  const KGrid& kgrid,
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  bool enable_profiling = false
+);
+
 // Multi-object result structure
 struct IntersectionVolumeMatrixResult {
   Eigen::MatrixXd volume_matrix;  // nObj × nObj symmetric matrix
@@ -281,46 +316,18 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   bool enable_profiling = false
 );
 
-// Self-volume computation (divergence theorem) - returns VolumeResult with gradient/Hessian support
-VolumeResult compute_volume_unified_cuda(
-  const Geometry& ref_geom,
-  const std::shared_ptr<DoFParameterization>& dof,
-  const Eigen::VectorXd& dofs,
-  const KGrid& kgrid,
-  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
-  int blockSize = 256,
-  bool enable_profiling = false
-);
-
-// Convenience: no DoF (uses identity AffineDoF)
-double compute_volume_cuda(
-  const Geometry& geom,
-  const KGrid& kgrid,
-  int blockSize = 256,
-  bool enable_profiling = false
-);
-
 // CPU/TBB versions (same interface, different suffix)
-IntersectionVolumeResult compute_intersection_volume_unified_cpu(
-  const Geometry& ref_geom1,
-  const Geometry& ref_geom2,
-  const std::shared_ptr<DoFParameterization>& dof1,
-  const std::shared_ptr<DoFParameterization>& dof2,
-  const Eigen::VectorXd& dofs1,
-  const Eigen::VectorXd& dofs2,
+IntersectionVolumeMatrixResult compute_intersection_volume_matrix_unified_cpu(
+  const std::vector<Geometry>& ref_geometries,  // Reference geometries
+  const std::vector<std::shared_ptr<DoFParameterization>>& dof_params,
+  const std::vector<Eigen::VectorXd>& dof_values,
   const KGrid& kgrid,
   ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  const std::vector<std::pair<int, int>>& gradient_pairs = {},  // Pairs to compute gradients for
+  int blockSize = 256,
   bool enable_profiling = false
 );
 
-VolumeResult compute_volume_unified_cpu(
-  const Geometry& ref_geom,
-  const std::shared_ptr<DoFParameterization>& dof,
-  const Eigen::VectorXd& dofs,
-  const KGrid& kgrid,
-  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
-  bool enable_profiling = false
-);
 ```
 
 ### 4. Kernel Design for Matrix Computation
@@ -547,7 +554,7 @@ struct IntersectionVolumeMatrixResult {
    - `TriangleMeshDoF`: Implement vertex position gradients in CUDA
    - Reuse existing element functions (`E_func`, `Phi_ab`, etc.) in device code
 
-#### 4.2: Scalar Intersection Volume Gradient
+#### 5.2: Scalar Intersection Volume Gradient
 
 **Goal**: Compute gradient of `V = compute_intersection_volume_cuda(geom1, geom2, ...)` w.r.t. DoFs of both geometries.
 
@@ -610,7 +617,7 @@ Note: This approximation uses only first derivatives and does NOT require `d²A/
    );
    ```
 
-#### 4.3: Matrix Intersection Volume Gradient
+#### 5.3: Matrix Intersection Volume Gradient
 
 **Goal**: Compute gradient of volume matrix `V[i,j]` w.r.t. DoFs of objects i and j.
 
@@ -656,7 +663,7 @@ Note: This approximation uses only first derivatives and does NOT require `d²A/
    );
    ```
 
-#### 4.4: Optimization Strategy
+#### 5.4: Optimization Strategy
 
 **Performance Considerations**:
 1. **Precompute form factors**: Compute `J` matrix once, reuse for gradient computation
@@ -673,7 +680,7 @@ Note: This approximation uses only first derivatives and does NOT require `d²A/
 
 ### Phase 6: Applications
 
-#### 5.1: Geometry Alignment via Similarity Optimization
+#### 6.1: Geometry Alignment via Similarity Optimization
 
 **Goal**: Align two geometries by optimizing an affine transformation to maximize similarity measures (Ochiai, Jaccard, Dice).
 
@@ -709,7 +716,7 @@ AlignmentResult align_geometries(
    - Update transformation using optimizer
 3. Return optimal transformation
 
-#### 5.2: Affine Body Dynamics Simulator
+#### 6.2: Affine Body Dynamics Simulator
 
 **Goal**: Integrate intersection volume computation into a physics simulator using libigl.
 
@@ -787,7 +794,7 @@ struct ReducedOrderDoF : public DoFParameterization {
 
 ### Phase 8: Python Bindings and Kaolin Integration
 
-#### 7.1: Python Bindings (pybind11)
+#### 8.1: Python Bindings (pybind11)
 
 **Goal**: Expose core functionality to Python for easier integration and experimentation.
 
@@ -824,7 +831,7 @@ result = poIntInt.compute_intersection_volume_gradient_cuda(
 5. Add NumPy array support for Eigen matrices
 6. Create Python package structure
 
-#### 7.2: Kaolin Integration
+#### 8.2: Kaolin Integration
 
 **Goal**: Integrate with NVIDIA Kaolin's simplicits library for neural implicit surfaces.
 
