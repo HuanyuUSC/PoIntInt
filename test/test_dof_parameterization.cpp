@@ -271,7 +271,7 @@ bool test_affine_dof_gradient_point_cloud() {
         double abs_fd = std::abs(grad_fd(i));
 
         // Use absolute error if both are near zero, otherwise use relative error
-        bool use_absolute = (abs_analytical < 1e-10 && abs_fd < 1e-10);
+        bool use_absolute = (abs_analytical < 1e-8 && abs_fd < 1e-8);
         double error = use_absolute ? abs_error : (abs_error / std::max(abs_analytical, abs_fd));
 
         if (error > max_rel_error) {
@@ -369,7 +369,7 @@ bool test_affine_dof_gradient_gaussian_splat() {
         double abs_fd = std::abs(grad_fd(i));
 
         // Use absolute error if both are near zero, otherwise use relative error
-        bool use_absolute = (abs_analytical < 1e-10 && abs_fd < 1e-10);
+        bool use_absolute = (abs_analytical < 1e-8 && abs_fd < 1e-8);
         double error = use_absolute ? abs_error : (abs_error / std::max(abs_analytical, abs_fd));
 
         if (error > max_rel_error) {

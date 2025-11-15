@@ -2,6 +2,10 @@
 #include "element_functions.hpp"
 #include <Eigen/Dense>
 #include <cassert>
+#include <tbb/parallel_for.h>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
+#include <functional>
 
 namespace PoIntInt {
 
@@ -20,17 +24,19 @@ Geometry TriangleMeshDoF::apply(const Geometry& geom, const Eigen::VectorXd& dof
   // Reconstruct triangles from new vertex positions
   // Use the stored face connectivity F_
   Geometry transformed = geom;
-  for (int i = 0; i < F_.rows(); i++)
-  {
-    Eigen::Vector3d a = dofs.segment<3>(3 * F_(i, 0));
-    Eigen::Vector3d e1 = dofs.segment<3>(3 * F_(i, 1)) - a;
-    Eigen::Vector3d e2 = dofs.segment<3>(3 * F_(i, 2)) - a;
-    Eigen::Vector3d S = 0.5 * e1.cross(e2);
-    transformed.tris[i].a = make_float3((float)a.x(), (float)a.y(), (float)a.z());
-    transformed.tris[i].e1 = make_float3((float)e1.x(), (float)e1.y(), (float)e1.z());
-    transformed.tris[i].e2 = make_float3((float)e2.x(), (float)e2.y(), (float)e2.z());
-    transformed.tris[i].S = make_float3((float)S.x(), (float)S.y(), (float)S.z());
-  }
+  tbb::parallel_for(tbb::blocked_range<int>(0, F_.rows()),
+    [&](const tbb::blocked_range<int>& r) {
+      for (int i = r.begin(); i < r.end(); ++i) {
+        Eigen::Vector3d a = dofs.segment<3>(3 * F_(i, 0));
+        Eigen::Vector3d e1 = dofs.segment<3>(3 * F_(i, 1)) - a;
+        Eigen::Vector3d e2 = dofs.segment<3>(3 * F_(i, 2)) - a;
+        Eigen::Vector3d S = 0.5 * e1.cross(e2);
+        transformed.tris[i].a = make_float3((float)a.x(), (float)a.y(), (float)a.z());
+        transformed.tris[i].e1 = make_float3((float)e1.x(), (float)e1.y(), (float)e1.z());
+        transformed.tris[i].e2 = make_float3((float)e2.x(), (float)e2.y(), (float)e2.z());
+        transformed.tris[i].S = make_float3((float)S.x(), (float)S.y(), (float)S.z());
+      }
+    });
   
   return transformed;
 }
@@ -51,33 +57,42 @@ std::complex<double> TriangleMeshDoF::compute_A(
 
   const Eigen::Vector3d khat = k / knorm;
 
+  // the imaginary unit
+  static const std::complex<double> I(0.0, 1.0);
+
   // Per-face loop
-  for (int f = 0; f < F_.rows(); ++f) {
-    const Eigen::Vector3i& vid = F_.row(f);
-    Eigen::Vector3d v[3] = { dofs.segment<3>(3 * vid[0]),
-      dofs.segment<3>(3 * vid[1]), dofs.segment<3>(3 * vid[2]) };
+  A = tbb::parallel_reduce(
+    tbb::blocked_range<int>(0, F_.rows()),
+    std::complex<double>(0.0, 0.0),
+    [&](const tbb::blocked_range<int>& r, std::complex<double> local_sum) -> std::complex<double> {
+      for (int f = r.begin(); f < r.end(); ++f) {
+        const Eigen::Vector3i& vid = F_.row(f);
+        Eigen::Vector3d v[3] = { dofs.segment<3>(3 * vid[0]),
+          dofs.segment<3>(3 * vid[1]), dofs.segment<3>(3 * vid[2]) };
 
-    // edges e1=v1-v0, e2=v2-v0
-    Eigen::Vector3d e1 = v[1] - v[0];
-    Eigen::Vector3d e2 = v[2] - v[0];
+        // edges e1=v1-v0, e2=v2-v0
+        Eigen::Vector3d e1 = v[1] - v[0];
+        Eigen::Vector3d e2 = v[2] - v[0];
 
-    // Area-vector σn = 0.5 * (v1-v0) x (v2-v0)
-    Eigen::Vector3d sigma_n = 0.5 * e1.cross(e2);
+        // Area-vector σn = 0.5 * (v1-v0) x (v2-v0)
+        Eigen::Vector3d sigma_n = 0.5 * e1.cross(e2);
 
-    // κ = k̂ · σn (real)
-    const double kappa = khat.dot(sigma_n);
+        // κ = k̂ · σn (real)
+        const double kappa = khat.dot(sigma_n);
 
-    // the imaginary unit
-    static const std::complex<double> I(0.0, 1.0);
+        // T = exp(i k·v0)
+        std::complex<double> T = std::exp(I * k.dot(v[0]));
 
-    // T = exp(i k·v0)
-    std::complex<double> T = std::exp(I * k.dot(v[0]));
+        // ψ = Φ(k·e1, k·e2)
+        std::complex<double> psi = Triangle_Phi_ab(k.dot(e1), k.dot(e2));
 
-    // ψ = Φ(k·e1, k·e2)
-    std::complex<double> psi = Triangle_Phi_ab(k.dot(e1), k.dot(e2));
-
-    A += kappa * T * psi;
-  }
+        local_sum += kappa * T * psi;
+      }
+      return local_sum;
+    },
+    [](const std::complex<double>& a, const std::complex<double>& b) -> std::complex<double> {
+      return a + b;
+    });
 
   return A;
 }
@@ -98,42 +113,53 @@ Eigen::VectorXcd TriangleMeshDoF::compute_A_gradient(
 
   const Eigen::Vector3d khat = k / knorm;
 
+  // the imaginary unit
+  static const std::complex<double> I(0.0, 1.0);
+
   // Per-face loop
-  for (int f = 0; f < F_.rows(); ++f) {
-    const Eigen::Vector3i& vid = F_.row(f);
-    Eigen::Vector3d v[3] = { dofs.segment<3>(3 * vid[0]),
-      dofs.segment<3>(3 * vid[1]), dofs.segment<3>(3 * vid[2])};
+  Eigen::VectorXcd init_grad = Eigen::VectorXcd::Zero(num_dofs_);
+  Eigen::VectorXcd grad_sum = tbb::parallel_reduce(
+    tbb::blocked_range<int>(0, F_.rows()),
+    init_grad,
+    [&](const tbb::blocked_range<int>& r, Eigen::VectorXcd local_grad) -> Eigen::VectorXcd {
+      for (int f = r.begin(); f < r.end(); ++f) {
+        const Eigen::Vector3i& vid = F_.row(f);
+        Eigen::Vector3d v[3] = { dofs.segment<3>(3 * vid[0]),
+          dofs.segment<3>(3 * vid[1]), dofs.segment<3>(3 * vid[2])};
 
-    // edges e1=v1-v0, e2=v2-v0
-    Eigen::Vector3d e1 = v[1] - v[0];
-    Eigen::Vector3d e2 = v[2] - v[0];
+        // edges e1=v1-v0, e2=v2-v0
+        Eigen::Vector3d e1 = v[1] - v[0];
+        Eigen::Vector3d e2 = v[2] - v[0];
 
-    // Area-vector σn = 0.5 * (v1-v0) x (v2-v0)
-    Eigen::Vector3d sigma_n = 0.5 * e1.cross(e2);
+        // Area-vector σn = 0.5 * (v1-v0) x (v2-v0)
+        Eigen::Vector3d sigma_n = 0.5 * e1.cross(e2);
 
-    // κ = k̂ · σn (real)
-    const double kappa = khat.dot(sigma_n);
+        // κ = k̂ · σn (real)
+        const double kappa = khat.dot(sigma_n);
 
-    // ∇_v_j κ = 0.5 * k̂ × (v_{j+2} - v_{j+1})
-    Eigen::Vector3d dkap[3] = { 0.5 * khat.cross(e2 - e1), -0.5 * khat.cross(e2), 0.5 * khat.cross(e1) };
+        // ∇_v_j κ = 0.5 * k̂ × (v_{j+2} - v_{j+1})
+        Eigen::Vector3d dkap[3] = { 0.5 * khat.cross(e2 - e1), -0.5 * khat.cross(e2), 0.5 * khat.cross(e1) };
 
-    // the imaginary unit
-    static const std::complex<double> I(0.0, 1.0);
+        // T = exp(i k·v0)
+        std::complex<double> T = std::exp(I * k.dot(v[0]));
 
-    // T = exp(i k·v0)
-    std::complex<double> T = std::exp(I * k.dot(v[0]));
+        // ψ = Φ(k·e1, k·e2)
+        double k_dot_e1 = k.dot(e1);
+        double k_dot_e2 = k.dot(e2);    
+        std::complex<double> psi = Triangle_Phi_ab(k_dot_e1, k_dot_e2);
+        // and needed partials:
+        auto [dPa, dPb] = Triangle_Phi_ab_gradient(k_dot_e1, k_dot_e2);
 
-    // ψ = Φ(k·e1, k·e2)
-    double k_dot_e1 = k.dot(e1);
-    double k_dot_e2 = k.dot(e2);    
-    std::complex<double> psi = Triangle_Phi_ab(k_dot_e1, k_dot_e2);
-    // and needed partials:
-    auto [dPa, dPb] = Triangle_Phi_ab_gradient(k_dot_e1, k_dot_e2);
-
-    grad.segment<3>(3 * vid[0]) += T * (psi * dkap[0] + kappa * k * (psi * I - dPa - dPb));
-    grad.segment<3>(3 * vid[1]) += T * (psi * dkap[1] + kappa * k * dPa);
-    grad.segment<3>(3 * vid[2]) += T * (psi * dkap[2] + kappa * k * dPb);
-  }
+        local_grad.segment<3>(3 * vid[0]) += T * (psi * dkap[0] + kappa * k * (psi * I - dPa - dPb));
+        local_grad.segment<3>(3 * vid[1]) += T * (psi * dkap[1] + kappa * k * dPa);
+        local_grad.segment<3>(3 * vid[2]) += T * (psi * dkap[2] + kappa * k * dPb);
+      }
+      return local_grad;
+    },
+    [](const Eigen::VectorXcd& a, const Eigen::VectorXcd& b) -> Eigen::VectorXcd {
+      return a + b;
+    });
+  grad += grad_sum;
 
   return grad;
 }
@@ -151,21 +177,31 @@ Eigen::VectorXd TriangleMeshDoF::compute_volume_gradient(
   
   // For each triangle, compute its contribution to the volume gradient
   // Volume: V = (1/6) * Σ_triangles |v_i, v_j, v_k|
-  for (int f = 0; f < F_.rows(); ++f) {
-    int i = F_(f, 0);  // First vertex index
-    int j = F_(f, 1);  // Second vertex index
-    int k = F_(f, 2);  // Third vertex index
-    
-    // Triangle vertices
-    const Eigen::Vector3d& v_i = dofs.segment<3>(3 * i);
-    const Eigen::Vector3d& v_j = dofs.segment<3>(3 * j);
-    const Eigen::Vector3d& v_k = dofs.segment<3>(3 * k);
+  Eigen::VectorXd init_grad = Eigen::VectorXd::Zero(num_dofs_);
+  Eigen::VectorXd grad_sum = tbb::parallel_reduce(
+    tbb::blocked_range<int>(0, F_.rows()),
+    init_grad,
+    [&](const tbb::blocked_range<int>& r, Eigen::VectorXd local_grad) -> Eigen::VectorXd {
+      for (int f = r.begin(); f < r.end(); ++f) {
+        int i = F_(f, 0);  // First vertex index
+        int j = F_(f, 1);  // Second vertex index
+        int k_idx = F_(f, 2);  // Third vertex index
+        
+        // Triangle vertices
+        const Eigen::Vector3d& v_i = dofs.segment<3>(3 * i);
+        const Eigen::Vector3d& v_j = dofs.segment<3>(3 * j);
+        const Eigen::Vector3d& v_k = dofs.segment<3>(3 * k_idx);
 
-    grad.segment<3>(3 * i) += v_j.cross(v_k);
-    grad.segment<3>(3 * j) += v_k.cross(v_i);
-    grad.segment<3>(3 * k) += v_i.cross(v_j);
-  }
-  grad /= 6.0;
+        local_grad.segment<3>(3 * i) += v_j.cross(v_k);
+        local_grad.segment<3>(3 * j) += v_k.cross(v_i);
+        local_grad.segment<3>(3 * k_idx) += v_i.cross(v_j);
+      }
+      return local_grad;
+    },
+    [](const Eigen::VectorXd& a, const Eigen::VectorXd& b) -> Eigen::VectorXd {
+      return a + b;
+    });
+  grad = grad_sum / 6.0;
   
   return grad;
 }
