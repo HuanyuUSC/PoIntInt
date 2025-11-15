@@ -25,5 +25,13 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   bool enable_profiling = false
 );
 
+// CPU version of multi-object intersection volume computation (parallelized with TBB)
+// Uses the same logic as the CUDA version but computed on CPU
+IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cpu(
+  const std::vector<Geometry>& geometries,
+  const KGrid& kgrid,
+  bool enable_profiling = false
+);
+
 } // namespace PoIntInt
 

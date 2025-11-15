@@ -768,6 +768,166 @@ bool test_mixed_geometry_with_gaussians(const std::string& leb_file, int Nrad = 
   return passed;
 }
 
+// Test: CPU vs GPU comparison (accuracy and speed)
+bool test_cpu_vs_gpu_comparison(const std::string& leb_file, int Nrad = 96) {
+  std::cout << "\n=== Test: CPU vs GPU Comparison (Multi-Object) ===" << std::endl;
+  
+  // Create a mix of geometries for comprehensive testing
+  // 2 unit cube meshes
+  Eigen::MatrixXd V1, V2;
+  Eigen::MatrixXi F1, F2;
+  create_unit_cube_mesh(V1, F1);
+  create_unit_cube_mesh(V2, F2);
+  
+  // Translate cubes
+  Eigen::Vector3d t1(0.0, 0.0, 0.0);
+  Eigen::Vector3d t2(0.3, 0.0, 0.0);
+  for (int i = 0; i < V2.rows(); ++i) {
+    V2.row(i) += t2;
+  }
+  
+  // 1 unit sphere point cloud
+  Eigen::MatrixXd P3, N3;
+  Eigen::VectorXd radii3;
+  create_sphere_pointcloud(P3, N3, radii3, 2000);
+  Eigen::Vector3d t3(0.0, 0.5, 0.0);
+  for (int i = 0; i < P3.rows(); ++i) {
+    P3.row(i) += t3;
+  }
+  
+  // 1 unit sphere Gaussian splat
+  Eigen::MatrixXd P4, N4;
+  Eigen::VectorXd sigmas4, weights4;
+  create_sphere_gaussians(P4, N4, sigmas4, weights4, 2000);
+  Eigen::Vector3d t4(0.3, 0.5, 0.0);
+  for (int i = 0; i < P4.rows(); ++i) {
+    P4.row(i) += t4;
+  }
+  
+  // Create geometries: [cube1, cube2, sphere_pointcloud, sphere_gaussian]
+  auto geom1 = make_triangle_mesh(V1, F1);
+  auto geom2 = make_triangle_mesh(V2, F2);
+  auto geom3 = make_point_cloud(P3, N3, radii3, true);
+  auto geom4 = make_gaussian_splat(P4, N4, sigmas4, weights4);
+  
+  std::vector<Geometry> geometries = {geom1, geom2, geom3, geom4};
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
+  
+  // Compute using CPU version (with profiling)
+  std::cout << "\n--- CPU Version ---" << std::endl;
+  auto result_cpu = compute_intersection_volume_matrix_cpu(geometries, KG, true);
+  
+  // Compute using GPU version (with profiling)
+  std::cout << "\n--- GPU Version ---" << std::endl;
+  auto result_gpu = compute_intersection_volume_matrix_cuda(geometries, KG, 256, true);
+  
+  int num_objects = (int)geometries.size();
+  
+  // Compare results
+  std::cout << "\n--- Comparison ---" << std::endl;
+  std::cout << std::fixed << std::setprecision(10);
+  std::cout << "Number of objects: " << num_objects << std::endl;
+  
+  // Check symmetry for both
+  bool cpu_symmetric = true;
+  bool gpu_symmetric = true;
+  for (int i = 0; i < num_objects; ++i) {
+    for (int j = 0; j < num_objects; ++j) {
+      if (std::abs(result_cpu.volume_matrix(i, j) - result_cpu.volume_matrix(j, i)) > 1e-5) {
+        cpu_symmetric = false;
+      }
+      if (std::abs(result_gpu.volume_matrix(i, j) - result_gpu.volume_matrix(j, i)) > 1e-5) {
+        gpu_symmetric = false;
+      }
+    }
+  }
+  
+  // Compare CPU vs GPU
+  double max_abs_diff = 0.0;
+  double max_rel_diff = 0.0;
+  int num_compared = 0;
+  
+  for (int i = 0; i < num_objects; ++i) {
+    for (int j = 0; j < num_objects; ++j) {
+      double cpu_val = result_cpu.volume_matrix(i, j);
+      double gpu_val = result_gpu.volume_matrix(i, j);
+      double abs_diff = std::abs(cpu_val - gpu_val);
+      double avg_val = 0.5 * (std::abs(cpu_val) + std::abs(gpu_val));
+      double rel_diff = (avg_val > 1e-10) ? (abs_diff / avg_val) : abs_diff;
+      
+      if (abs_diff > max_abs_diff) {
+        max_abs_diff = abs_diff;
+      }
+      if (rel_diff > max_rel_diff) {
+        max_rel_diff = rel_diff;
+      }
+      num_compared++;
+    }
+  }
+  
+  // Compare against analytical ground truth for diagonal entries
+  double expected_cube_volume = 1.0;
+  double expected_sphere_volume = 4.0 * M_PI / 3.0;
+  
+  double cpu_diag_error = 0.0;
+  double gpu_diag_error = 0.0;
+  
+  for (int i = 0; i < 2; ++i) {
+    double cpu_rel = std::abs(result_cpu.volume_matrix(i, i) - expected_cube_volume) / expected_cube_volume;
+    double gpu_rel = std::abs(result_gpu.volume_matrix(i, i) - expected_cube_volume) / expected_cube_volume;
+    cpu_diag_error = std::max(cpu_diag_error, cpu_rel);
+    gpu_diag_error = std::max(gpu_diag_error, gpu_rel);
+  }
+  
+  for (int i = 2; i < 4; ++i) {
+    double cpu_rel = std::abs(result_cpu.volume_matrix(i, i) - expected_sphere_volume) / expected_sphere_volume;
+    double gpu_rel = std::abs(result_gpu.volume_matrix(i, i) - expected_sphere_volume) / expected_sphere_volume;
+    cpu_diag_error = std::max(cpu_diag_error, cpu_rel);
+    gpu_diag_error = std::max(gpu_diag_error, gpu_rel);
+  }
+  
+  std::cout << std::scientific << std::setprecision(6);
+  std::cout << "  CPU-GPU max abs diff: " << max_abs_diff << std::endl;
+  std::cout << "  CPU-GPU max rel diff: " << max_rel_diff 
+            << " (" << std::fixed << std::setprecision(4) << max_rel_diff * 100.0 << "%)" << std::endl;
+  std::cout << std::scientific << std::setprecision(6);
+  std::cout << "  CPU diagonal error:  " << cpu_diag_error 
+            << " (" << std::fixed << std::setprecision(4) << cpu_diag_error * 100.0 << "%)" << std::endl;
+  std::cout << "  GPU diagonal error:  " << gpu_diag_error 
+            << " (" << std::fixed << std::setprecision(4) << gpu_diag_error * 100.0 << "%)" << std::endl;
+  
+  // Print sample matrix entries for comparison
+  std::cout << "\nSample matrix entries (CPU vs GPU):" << std::endl;
+  std::cout << std::fixed << std::setprecision(8);
+  for (int i = 0; i < std::min(4, num_objects); ++i) {
+    for (int j = 0; j < std::min(4, num_objects); ++j) {
+      std::cout << "  V[" << i << "," << j << "]: CPU=" << std::setw(12) << result_cpu.volume_matrix(i, j)
+                << " GPU=" << std::setw(12) << result_gpu.volume_matrix(i, j)
+                << " diff=" << std::scientific << std::setw(10) 
+                << std::abs(result_cpu.volume_matrix(i, j) - result_gpu.volume_matrix(i, j)) << std::endl;
+    }
+  }
+  
+  // Accuracy checks
+  bool accuracy_passed = (cpu_diag_error < 0.25) && (gpu_diag_error < 0.25);  // 25% tolerance
+  bool consistency_passed = max_rel_diff < 0.05;  // 5% relative difference between CPU and GPU
+  bool symmetry_passed = cpu_symmetric && gpu_symmetric;
+  
+  std::cout << "\nTest results:" << std::endl;
+  std::cout << "  CPU symmetry:     " << (cpu_symmetric ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  GPU symmetry:     " << (gpu_symmetric ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Accuracy check:   " << (accuracy_passed ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Consistency check:" << (consistency_passed ? "PASS" : "FAIL") << std::endl;
+  
+  bool passed = symmetry_passed && accuracy_passed && consistency_passed;
+  std::cout << "  Overall:          " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
+
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: " << argv[0] << " <lebedev_txt_file> [Nrad]" << std::endl;
@@ -797,6 +957,9 @@ int main(int argc, char** argv) {
   
   // Test 5: Mixed geometry types including Gaussian splats
   all_passed &= test_mixed_geometry_with_gaussians(leb_file, Nrad);
+  
+  // Test 6: CPU vs GPU comparison
+  all_passed &= test_cpu_vs_gpu_comparison(leb_file, Nrad);
   
   std::cout << "\n=== Summary ===" << std::endl;
   if (all_passed) {
