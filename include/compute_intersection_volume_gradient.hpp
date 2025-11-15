@@ -19,6 +19,8 @@ struct IntersectionVolumeGradientResult {
 // Mathematical formulation:
 //   ∂V/∂θ₁ = (1/(8π³)) · Σ_q w_q · Re( (∂A₁(k_q)/∂θ₁) · conj(A₂(k_q)) )
 //   ∂V/∂θ₂ = (1/(8π³)) · Σ_q w_q · Re( A₁(k_q) · conj(∂A₂(k_q)/∂θ₂) )
+
+// CUDA version
 IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   const Geometry& geom1,
   const Geometry& geom2,
@@ -28,6 +30,18 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   const Eigen::VectorXd& dofs2,
   const KGrid& kgrid,
   int blockSize = 256,
+  bool enable_profiling = false
+);
+
+// CPU version (parallelized with TBB)
+IntersectionVolumeGradientResult compute_intersection_volume_gradient_cpu(
+  const Geometry& geom1,
+  const Geometry& geom2,
+  const std::shared_ptr<DoFParameterization>& dof1,
+  const std::shared_ptr<DoFParameterization>& dof2,
+  const Eigen::VectorXd& dofs1,
+  const Eigen::VectorXd& dofs2,
+  const KGrid& kgrid,
   bool enable_profiling = false
 );
 
