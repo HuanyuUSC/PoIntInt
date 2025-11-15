@@ -81,6 +81,8 @@ Geometry make_point_cloud(const Eigen::MatrixXd& P, const Eigen::MatrixXd& N,
 
 ### 2. DoF Parameterization Layer
 
+**Key Architectural Change**: DoF parameterizations do NOT transform geometries directly. Instead, they provide methods to compute form factors A(k) and their gradients for a reference geometry under a given DoF configuration. This is because applying an affine transform to disks or Gaussians does not preserve their shape (they become elliptical).
+
 ```cpp
 // Abstract base for DoF parameterizations
 struct DoFParameterization {
@@ -89,35 +91,122 @@ struct DoFParameterization {
   // Number of DoFs
   virtual int num_dofs() const = 0;
   
-  // Apply transformation to geometry (returns transformed geometry)
-  virtual Geometry apply(const Geometry& geom, const Eigen::VectorXd& dofs) const = 0;
+  // Compute form factor A(k) for reference geometry under DoF configuration
+  // This is the fundamental operation - no geometry transformation needed
+  virtual std::complex<double> 
+    compute_A(const Geometry& ref_geom, const Eigen::Vector3d& k, 
+              const Eigen::VectorXd& dofs) const = 0;
   
   // Compute gradient of form factor A(k) w.r.t. DoFs
   // Returns: dA/dθ for each DoF (complex vector of size num_dofs)
   virtual Eigen::VectorXcd 
-    compute_A_gradient(const Geometry& geom, const Eigen::Vector3d& k, 
+    compute_A_gradient(const Geometry& ref_geom, const Eigen::Vector3d& k, 
                       const Eigen::VectorXd& dofs) const = 0;
+  
+  // Optional: Compute Hessian (Gauss-Newton approximation) of A(k) w.r.t. DoFs
+  // Returns: d²A/dθ² (complex matrix of size num_dofs × num_dofs)
+  // Default implementation returns zero matrix
+  virtual Eigen::MatrixXcd 
+    compute_A_hessian(const Geometry& ref_geom, const Eigen::Vector3d& k,
+                     const Eigen::VectorXd& dofs) const {
+    return Eigen::MatrixXcd::Zero(num_dofs(), num_dofs());
+  }
 };
 
-// Affine transformation DoFs: [translation(3), rotation(3), scale(3), shear(3)] = 12 DoFs
+// Affine transformation DoFs: [translation(3), matrix(9)] = 12 DoFs
+// Matrix is stored row-major: [A00, A01, A02, A10, A11, A12, A20, A21, A22]
 struct AffineDoF : public DoFParameterization {
   int num_dofs() const override { return 12; }
-  Geometry apply(const Geometry& geom, const Eigen::VectorXd& dofs) const override;
+  
+  // Compute A(k) for reference geometry under affine transformation
+  // For triangles: transforms vertices and computes form factor
+  // For disks: transforms center/normal and accounts for scaling of radius/area
+  // For Gaussians: transforms center/normal and accounts for scaling of sigma/weight
+  std::complex<double> 
+    compute_A(const Geometry& ref_geom, const Eigen::Vector3d& k,
+              const Eigen::VectorXd& dofs) const override;
+  
   Eigen::VectorXcd 
-    compute_A_gradient(const Geometry& geom, const Eigen::Vector3d& k,
+    compute_A_gradient(const Geometry& ref_geom, const Eigen::Vector3d& k,
                       const Eigen::VectorXd& dofs) const override;
+  
+  // Optional: Hessian computation for second-order optimization
+  Eigen::MatrixXcd 
+    compute_A_hessian(const Geometry& ref_geom, const Eigen::Vector3d& k,
+                     const Eigen::VectorXd& dofs) const override;
 };
 
 // Nonlinear deformation DoFs (e.g., control points, basis functions)
 struct NonlinearDoF : public DoFParameterization {
   // Implementation depends on specific deformation model
+  // Same interface: compute_A, compute_A_gradient, compute_A_hessian
 };
 ```
 
-### 3. Multi-Object Interface
+### 3. Unified Computation Interface
+
+**Key Architectural Change**: All volume computation routines now take reference geometries and DoF parameterizations. The old "apply then compute" approach is replaced with "compute with DoF" approach.
 
 ```cpp
-// Result structure for multi-object computation
+// Computation flags - specify what to compute
+enum class ComputationFlags {
+  VOLUME_ONLY = 0x01,
+  GRADIENT = 0x02,
+  HESSIAN = 0x04,
+  ALL = VOLUME_ONLY | GRADIENT | HESSIAN
+};
+
+// Result structure for unified computation
+struct IntersectionVolumeResult {
+  double volume;  // Intersection volume
+  
+  // Gradients (only computed if requested)
+  Eigen::VectorXd grad_geom1;  // Gradient w.r.t. DoFs of geometry 1
+  Eigen::VectorXd grad_geom2;  // Gradient w.r.t. DoFs of geometry 2
+  
+  // Hessians (only computed if requested, Gauss-Newton approximation)
+  Eigen::MatrixXd hessian_geom1;  // Hessian w.r.t. DoFs of geometry 1
+  Eigen::MatrixXd hessian_geom2;  // Hessian w.r.t. DoFs of geometry 2
+  Eigen::MatrixXd hessian_cross;  // Cross-term Hessian (∂²V/∂θ₁∂θ₂)
+};
+
+// Unified scalar intersection volume interface (with DoF)
+IntersectionVolumeResult compute_intersection_volume_unified_cuda(
+  const Geometry& ref_geom1,  // Reference geometry 1
+  const Geometry& ref_geom2,  // Reference geometry 2
+  const std::shared_ptr<DoFParameterization>& dof1,  // DoF for geometry 1
+  const std::shared_ptr<DoFParameterization>& dof2,  // DoF for geometry 2
+  const Eigen::VectorXd& dofs1,  // DoF values for geometry 1
+  const Eigen::VectorXd& dofs2,  // DoF values for geometry 2
+  const KGrid& kgrid,
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  int blockSize = 256,
+  bool enable_profiling = false
+);
+
+// Convenience: volume only (backward compatible with gradient interface)
+double compute_intersection_volume_cuda(
+  const Geometry& ref_geom1,
+  const Geometry& ref_geom2,
+  const std::shared_ptr<DoFParameterization>& dof1,
+  const std::shared_ptr<DoFParameterization>& dof2,
+  const Eigen::VectorXd& dofs1,
+  const Eigen::VectorXd& dofs2,
+  const KGrid& kgrid,
+  int blockSize = 256,
+  bool enable_profiling = false
+);
+
+// Convenience: no DoF (uses identity AffineDoF internally)
+double compute_intersection_volume_cuda(
+  const Geometry& geom1,
+  const Geometry& geom2,
+  const KGrid& kgrid,
+  int blockSize = 256,
+  bool enable_profiling = false
+);
+
+// Multi-object result structure
 struct IntersectionVolumeMatrixResult {
   Eigen::MatrixXd volume_matrix;  // nObj × nObj symmetric matrix
   
@@ -127,52 +216,65 @@ struct IntersectionVolumeMatrixResult {
   // Format: [∂V[i,j]/∂θ_i, ∂V[i,j]/∂θ_j]
   std::vector<std::vector<Eigen::VectorXd>> gradients;
   
+  // Sparse Hessian storage (if requested)
+  std::vector<std::vector<Eigen::MatrixXd>> hessians;
+  
   // Metadata
   std::vector<int> dof_counts;  // Number of DoFs per object
 };
 
-// Main multi-object interface
-IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
-  const std::vector<Geometry>& geometries,
-  const std::vector<std::shared_ptr<DoFParameterization>>& dof_params,
-  const std::vector<Eigen::VectorXd>& dof_values,  // Current DoF values
-  const KGrid& kgrid,
-  const std::vector<std::pair<int, int>>& gradient_pairs = {},  // Pairs to compute gradients for
-  int blockSize = 256
-);
-
-// Convenience: compute all pairwise gradients
-IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
-  const std::vector<Geometry>& geometries,
+// Unified multi-object interface
+IntersectionVolumeMatrixResult compute_intersection_volume_matrix_unified_cuda(
+  const std::vector<Geometry>& ref_geometries,  // Reference geometries
   const std::vector<std::shared_ptr<DoFParameterization>>& dof_params,
   const std::vector<Eigen::VectorXd>& dof_values,
   const KGrid& kgrid,
-  bool compute_all_gradients,  // If true, compute gradients for all pairs
-  int blockSize = 256
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  const std::vector<std::pair<int, int>>& gradient_pairs = {},  // Pairs to compute gradients for
+  int blockSize = 256,
+  bool enable_profiling = false
 );
 
-// Convenience: no gradients
+// Convenience: no DoF (uses identity AffineDoF for all objects)
 IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   const std::vector<Geometry>& geometries,
   const KGrid& kgrid,
-  int blockSize = 256
+  int blockSize = 256,
+  bool enable_profiling = false
 );
 
-// Backward compatibility: 2-object scalar interface
-double compute_intersection_volume_cuda(
-  const Geometry& geom1,
-  const Geometry& geom2,
+// Self-volume computation (divergence theorem)
+double compute_volume_unified_cuda(
+  const Geometry& ref_geom,
+  const std::shared_ptr<DoFParameterization>& dof,
+  const Eigen::VectorXd& dofs,
   const KGrid& kgrid,
-  int blockSize = 256
+  int blockSize = 256,
+  bool enable_profiling = false
 );
 
-// Legacy: triangle-triangle (for unit tests)
-double compute_intersection_volume_cuda(
-  const std::vector<TriPacked>& tris1,
-  const std::vector<TriPacked>& tris2,
-  const KGrid& KG,
-  int blockSize = 256
+// Convenience: no DoF (uses identity AffineDoF)
+double compute_volume_cuda(
+  const Geometry& geom,
+  const KGrid& kgrid,
+  int blockSize = 256,
+  bool enable_profiling = false
 );
+
+// CPU/TBB versions (same interface, different suffix)
+IntersectionVolumeResult compute_intersection_volume_unified_cpu(
+  const Geometry& ref_geom1,
+  const Geometry& ref_geom2,
+  const std::shared_ptr<DoFParameterization>& dof1,
+  const std::shared_ptr<DoFParameterization>& dof2,
+  const Eigen::VectorXd& dofs1,
+  const Eigen::VectorXd& dofs2,
+  const KGrid& kgrid,
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  bool enable_profiling = false
+);
+
+// ... similar for multi-object and self-volume ...
 ```
 
 ### 4. Kernel Design for Matrix Computation
@@ -282,12 +384,62 @@ struct IntersectionVolumeMatrixResult {
 
 **Current Limitations:**
 - `compute_A_gradient` is CPU-based and uses TBB parallelization
-- Gradient computation is not yet integrated into CUDA kernels
-- No CUDA-based gradient computation for intersection volumes
+- Gradient computation is integrated into CUDA kernels via registry system
+- CUDA-based gradient computation for intersection volumes is implemented
+- **Architectural Issue**: Current implementation uses `apply()` to transform geometries, which is incorrect for disks/Gaussians (they become elliptical). Need to refactor to unified interface.
 
 ## Implementation Plan (Remaining)
 
-### Phase 4: CUDA-Based Gradient Computation
+### Phase 4: Unified Interface Refactoring (CRITICAL)
+
+**Goal**: Refactor all volume computation routines to use the unified interface that takes reference geometries and DoF parameterizations, eliminating the need for `apply()`.
+
+**Problem**: The current `apply()` function transforms geometries directly, but this is incorrect for disks and Gaussians because:
+- Applying an affine transform to a disk does not preserve its circular shape (becomes elliptical)
+- Applying an affine transform to a Gaussian splat does not preserve its spherical shape (becomes ellipsoidal)
+- The form factor computation should account for the transformation directly, not through geometry transformation
+
+**Solution**: 
+1. Remove `apply()` from `DoFParameterization` interface
+2. All volume computation routines take reference geometries + DoF parameterizations
+3. Form factor computation (A(k)) is done directly using the DoF, without transforming the geometry
+4. Old interfaces (without DoF) call new interfaces with identity `AffineDoF`
+
+**Implementation Steps**:
+
+1. **Refactor DoFParameterization Interface**:
+   - Remove `apply()` method
+   - Ensure `compute_A()` and `compute_A_gradient()` work directly with reference geometry + DoFs
+   - Update all DoF implementations (AffineDoF, TriangleMeshDoF, etc.)
+
+2. **Refactor Volume Computation Routines**:
+   - Create unified `compute_intersection_volume_unified_cuda()` that takes DoF parameterizations
+   - Update `compute_intersection_volume_cuda()` to call unified version with identity DoF
+   - Update `compute_intersection_volume_gradient_cuda()` to use unified interface
+   - Update multi-object routines similarly
+   - Update self-volume routines similarly
+
+3. **Refactor CPU/TBB Versions**:
+   - Same changes as CUDA versions
+   - Ensure consistency between CPU and GPU interfaces
+
+4. **Update Unit Tests**:
+   - Remove all uses of `apply()`
+   - Update tests to use unified interface
+   - Ensure backward compatibility tests still pass
+
+5. **Update Documentation**:
+   - Update design proposal (this document)
+   - Update implementation guides
+   - Update code comments
+
+**Benefits**:
+- Correctness: Form factors computed correctly for all geometry types
+- Consistency: Single unified interface for all computation types
+- Extensibility: Easy to add new DoF types without worrying about geometry transformation
+- Performance: No unnecessary geometry copying/transformation
+
+### Phase 5: CUDA-Based Gradient Computation (COMPLETED - needs refactoring)
 
 **Goal**: Implement efficient CUDA kernels for computing gradients of intersection volumes with respect to geometry DoFs.
 
@@ -450,7 +602,7 @@ struct IntersectionVolumeMatrixResult {
 4. Add unit tests comparing to finite differences
 5. Performance profiling and optimization
 
-### Phase 5: Applications
+### Phase 6: Applications
 
 #### 5.1: Geometry Alignment via Similarity Optimization
 
@@ -520,7 +672,7 @@ class AffineBodyDynamics {
 };
 ```
 
-### Phase 6: Reduced Order Model DoF Parameterization
+### Phase 7: Reduced Order Model DoF Parameterization
 
 **Goal**: Add support for deformation maps represented as linear combinations of modes.
 
@@ -564,7 +716,7 @@ struct ReducedOrderDoF : public DoFParameterization {
 3. Implement CUDA version for performance
 4. Add unit tests
 
-### Phase 7: Python Bindings and Kaolin Integration
+### Phase 8: Python Bindings and Kaolin Integration
 
 #### 7.1: Python Bindings (pybind11)
 
@@ -700,67 +852,118 @@ test/
 
 ## Timeline and Priorities
 
-### Immediate (Phase 4)
-1. **Refactor DoF gradient interface for CUDA** (2-3 weeks)
-2. **Implement scalar intersection volume gradient** (1-2 weeks)
-3. **Extend to matrix version** (1-2 weeks)
-4. **Testing and optimization** (1 week)
+### Immediate (Phase 4 - CRITICAL)
+1. **Refactor DoFParameterization interface** - Remove `apply()`, ensure `compute_A()` works correctly (1 week)
+2. **Refactor volume computation routines** - Unified interface for all routines (2 weeks)
+3. **Update CPU/TBB versions** - Ensure consistency (1 week)
+4. **Update unit tests** - Remove `apply()` usage, test unified interface (1 week)
+5. **Testing and validation** - Ensure correctness for all geometry types (1 week)
 
-### Short-term (Phase 5)
+### Short-term (Phase 5 - After Phase 4)
+1. **Refactor gradient computation** - Update to use unified interface (1 week)
+2. **Add Hessian support** - Implement Gauss-Newton approximation (1-2 weeks)
+3. **Performance optimization** - Profile and optimize unified interface (1 week)
+
+### Medium-term (Phase 6)
 1. **Geometry alignment application** (2-3 weeks)
 2. **Body dynamics integration** (2-3 weeks)
 
-### Medium-term (Phase 6)
+### Long-term (Phase 7-8)
 1. **Reduced order model DoF** (3-4 weeks)
-
-### Long-term (Phase 7)
-1. **Python bindings** (2-3 weeks)
-2. **Kaolin integration** (2-3 weeks)
+2. **Python bindings** (2-3 weeks)
+3. **Kaolin integration** (2-3 weeks)
 
 ## Example Usage
 
 ```cpp
 using namespace PoIntInt;
 
-// Create geometries
-auto geom1 = make_triangle_mesh(V1, F1);
-auto geom2 = make_point_cloud(P2, N2, radii2);
-auto geom3 = make_gaussian_splat(...);  // Future
+// Create reference geometries
+auto ref_geom1 = make_triangle_mesh(V1, F1);
+auto ref_geom2 = make_point_cloud(P2, N2, radii2);
+auto ref_geom3 = make_gaussian_splat(...);
 
-// Compute pairwise intersection volume matrix (no gradients)
-auto result = compute_intersection_volume_matrix_cuda(
-  {geom1, geom2, geom3},
-  kgrid
-);
+// ============================================================================
+// Unified Interface: Volume with DoF
+// ============================================================================
 
-std::cout << "Volume matrix:\n" << result.volume_matrix << std::endl;
-std::cout << "Volume between object 1 and 2: " << result.volume_matrix(0, 1) << std::endl;
-
-// With gradients for specific pairs
+// Create DoF parameterizations
 auto affine_dof = std::make_shared<AffineDoF>();
 Eigen::VectorXd dofs1(12), dofs2(12), dofs3(12);
-// ... initialize dofs ...
+// ... initialize dofs (translation + matrix) ...
 
-// Compute gradients only for pairs (0,1) and (1,2)
-auto result_with_grad = compute_intersection_volume_matrix_cuda(
-  {geom1, geom2, geom3},
+// Compute intersection volume with DoF (unified interface)
+auto result = compute_intersection_volume_unified_cuda(
+  ref_geom1, ref_geom2,
+  affine_dof, affine_dof,
+  dofs1, dofs2,
+  kgrid,
+  ComputationFlags::VOLUME_ONLY
+);
+std::cout << "Intersection volume: " << result.volume << std::endl;
+
+// Compute volume + gradient
+auto result_with_grad = compute_intersection_volume_unified_cuda(
+  ref_geom1, ref_geom2,
+  affine_dof, affine_dof,
+  dofs1, dofs2,
+  kgrid,
+  ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT
+);
+std::cout << "Volume: " << result_with_grad.volume << std::endl;
+std::cout << "Gradient w.r.t. geom1: " << result_with_grad.grad_geom1.transpose() << std::endl;
+
+// Compute volume + gradient + Hessian (for second-order optimization)
+auto result_full = compute_intersection_volume_unified_cuda(
+  ref_geom1, ref_geom2,
+  affine_dof, affine_dof,
+  dofs1, dofs2,
+  kgrid,
+  ComputationFlags::ALL
+);
+
+// ============================================================================
+// Convenience: No DoF (uses identity AffineDoF internally)
+// ============================================================================
+
+// Old interface still works - calls unified interface with identity DoF
+double vol_12 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, kgrid);
+std::cout << "Volume between 1 and 2: " << vol_12 << std::endl;
+
+// ============================================================================
+// Multi-Object Interface
+// ============================================================================
+
+// Multi-object with DoF
+auto matrix_result = compute_intersection_volume_matrix_unified_cuda(
+  {ref_geom1, ref_geom2, ref_geom3},
   {affine_dof, affine_dof, affine_dof},
   {dofs1, dofs2, dofs3},
   kgrid,
+  ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT,
   {{0, 1}, {1, 2}}  // gradient pairs
 );
 
-// Query gradients
-auto grad_01 = result_with_grad.gradients.get_pair_gradients(0, 1);
-std::cout << "∂V[0,1]/∂θ_0: " << grad_01.first.transpose() << std::endl;
-std::cout << "∂V[0,1]/∂θ_1: " << grad_01.second.transpose() << std::endl;
+// Multi-object without DoF (uses identity DoF for all)
+auto matrix_result_simple = compute_intersection_volume_matrix_cuda(
+  {ref_geom1, ref_geom2, ref_geom3},
+  kgrid
+);
 
-// Get total gradient w.r.t. object 1 (sum over all pairs involving object 1)
-auto total_grad_1 = result_with_grad.gradients.get_object_gradient(1);
+// ============================================================================
+// Self-Volume
+// ============================================================================
 
-// Backward compatibility: 2-object scalar interface
-double vol_12 = compute_intersection_volume_cuda(geom1, geom2, kgrid);
-std::cout << "Volume between 1 and 2: " << vol_12 << std::endl;
+// Self-volume with DoF
+double self_vol = compute_volume_unified_cuda(
+  ref_geom1,
+  affine_dof,
+  dofs1,
+  kgrid
+);
+
+// Self-volume without DoF
+double self_vol_simple = compute_volume_cuda(ref_geom1, kgrid);
 ```
 
 ## Benefits of This Design
