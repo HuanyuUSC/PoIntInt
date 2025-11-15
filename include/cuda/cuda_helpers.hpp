@@ -105,8 +105,11 @@ __device__ __forceinline__ double2 cscale(double2 a, double s) {
 __device__ __forceinline__ double J1_over_x(double x) {
   double ax = fabs(x);
 
-  // Tiny x: even Taylor up to x^8
-  if (ax < 1e-3) {
+  // Tiny x: even Taylor expansion
+  // Match CPU threshold: 1e-5 (from Disk_J1_over_x in element_functions.cpp)
+  // CPU uses: 0.5 - x^2/16 + x^4/384
+  // CUDA extends to: 0.5 - x^2/16 + x^4/384 - x^6/18432 (more accurate)
+  if (ax < 1e-5) {
     double x2 = x * x;
     double t = 0.5;                      // 1/2
     t += (-1.0 / 16.0) * x2;              // - x^2/16
@@ -117,6 +120,8 @@ __device__ __forceinline__ double J1_over_x(double x) {
     return t;
   }
 
+  // For values >= 1e-5, CPU uses std::cyl_bessel_j(1, x) / x
+  // CUDA uses series expansion for better performance and accuracy
   // Small–moderate x: stable series with term recurrence
   if (ax <= 12.0) {
     double q = 0.25 * x * x;            // x^2/4
@@ -146,6 +151,49 @@ __device__ __forceinline__ double J1_over_x(double x) {
   double sinp = (3.0 / 8.0 * invx - 315.0 / 3072.0 * invx3) * s;
   double J1 = amp * (cosp - sinp);
   return J1 * invx;                          // J1(x)/x
+}
+
+// J1_over_x_prime(x) := d/dx (J1(x)/x) = -J2(x)/x
+__device__ __forceinline__ double J1_over_x_prime(double x) {
+  double ax = fabs(x);
+  
+  // Tiny x: series expansion
+  if (ax < 1e-5) {
+    // From series: (J1(x)/x)' ≈ -x/8 + x^3/96
+    return -x / 8.0 + (x * x * x) / 96.0;
+  }
+  
+  // For larger x, we need J2(x)/x
+  // Use series for J2(x)/x for small x, or compute J2(x) for larger x
+  if (ax <= 12.0) {
+    // Series for J2(x)/x
+    double q = 0.25 * x * x;
+    double term = x / 8.0;  // First term: x/8
+    double sum = term;
+#pragma unroll
+    for (int m = 0; m < 20; ++m) {
+      double denom = (double)(m + 2) * (double)(m + 3);
+      term *= -q / denom;
+      sum += term;
+      if (fabs(term) < 1e-7 * fabs(sum)) break;
+    }
+    return -sum;  // -J2(x)/x
+  }
+  
+  // Large x: Hankel asymptotics for J2(x)
+  double invx = 1.0 / ax;
+  double invx2 = invx * invx;
+  double invx3 = invx2 * invx;
+  
+  double chi = ax - 1.25 * CUDART_PI;  // Phase for J2
+  double s, c;
+  sincos(chi, &s, &c);
+  
+  double amp = sqrt(2.0 / (CUDART_PI * ax));
+  double cosp = (1.0 - 105.0 / 128.0 * invx2) * c;
+  double sinp = (5.0 / 8.0 * invx - 945.0 / 1024.0 * invx3) * s;
+  double J2 = amp * (cosp - sinp);
+  return -J2 * invx;  // -J2(x)/x
 }
 
 // E(z) = (sin z + i (1 - cos z)) / z, stable small-z

@@ -33,6 +33,26 @@ extern "C" __global__ void compute_A_gradient_affine_triangle_kernel(
   int Q,
   double2* grad_A
 );
+
+extern "C" __global__ void compute_A_affine_disk_kernel(
+  const DiskPacked* __restrict__ disks,
+  int num_disks,
+  const double3* __restrict__ kdirs,
+  const double* __restrict__ kmags,
+  const double* __restrict__ dof_params,
+  int Q,
+  double2* A_out
+);
+
+extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
+  const DiskPacked* __restrict__ disks,
+  int num_disks,
+  const double3* __restrict__ kdirs,
+  const double* __restrict__ kmags,
+  const double* __restrict__ dof_params,
+  int Q,
+  double2* grad_A
+);
 #endif // AFFINE_DOF_CUDA_KERNELS_DEFINED
 #endif // __CUDACC__
 
@@ -59,7 +79,27 @@ void compute_Ak_gradient_affine_triangle_cuda_wrapper(
   int blockSize
 );
 
-// Register AffineDoF CUDA kernels
+// Compute A(k) for all k-points using CUDA (for disks/point clouds)
+// Wrapper around compute_A_affine_disk_kernel
+void compute_Ak_affine_disk_cuda_wrapper(
+  const Geometry& geom,
+  const KGrid& kgrid,
+  const Eigen::VectorXd& dofs,
+  double2* d_A_out,
+  int blockSize
+);
+
+// Compute ∂A(k)/∂θ for all k-points using CUDA (for disks/point clouds)
+// Wrapper around compute_A_gradient_affine_disk_kernel
+void compute_Ak_gradient_affine_disk_cuda_wrapper(
+  const Geometry& geom,
+  const KGrid& kgrid,
+  const Eigen::VectorXd& dofs,
+  double2* d_grad_A_out,
+  int blockSize
+);
+
+// Register AffineDoF CUDA kernels (for both triangles and disks)
 // This should be called once, typically in a static initializer
 void register_affine_dof_cuda_kernels();
 
