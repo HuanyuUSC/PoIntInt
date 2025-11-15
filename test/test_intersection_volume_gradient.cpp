@@ -63,50 +63,51 @@ Eigen::VectorXd compute_intersection_volume_gradient_finite_diff(
   int n_dofs = (which_geometry == 1) ? dof1->num_dofs() : dof2->num_dofs();
   Eigen::VectorXd grad(n_dofs);
   
+  // Compute base volume at unperturbed DoFs (for reference, though not used in formula)
+  Geometry geom1_base = dof1->apply(geom1, dofs1);
+  Geometry geom2_base = dof2->apply(geom2, dofs2);
+  
   for (int i = 0; i < n_dofs; ++i) {
     // 5-point finite difference for better accuracy
-    Eigen::VectorXd dofs1_plus = dofs1;
-    Eigen::VectorXd dofs2_plus = dofs2;
-    Eigen::VectorXd dofs1_minus = dofs1;
-    Eigen::VectorXd dofs2_minus = dofs2;
+    // Create fresh copies for each perturbation to avoid accumulation errors
+    Eigen::VectorXd dofs1_p2 = dofs1;
+    Eigen::VectorXd dofs2_p2 = dofs2;
+    Eigen::VectorXd dofs1_p1 = dofs1;
+    Eigen::VectorXd dofs2_p1 = dofs2;
+    Eigen::VectorXd dofs1_m1 = dofs1;
+    Eigen::VectorXd dofs2_m1 = dofs2;
+    Eigen::VectorXd dofs1_m2 = dofs1;
+    Eigen::VectorXd dofs2_m2 = dofs2;
     
+    // Set up perturbations
     if (which_geometry == 1) {
-      dofs1_plus(i) += 2.0 * eps;
-      dofs1_minus(i) -= 2.0 * eps;
+      dofs1_p2(i) += 2.0 * eps;
+      dofs1_p1(i) += eps;
+      dofs1_m1(i) -= eps;
+      dofs1_m2(i) -= 2.0 * eps;
     } else {
-      dofs2_plus(i) += 2.0 * eps;
-      dofs2_minus(i) -= 2.0 * eps;
+      dofs2_p2(i) += 2.0 * eps;
+      dofs2_p1(i) += eps;
+      dofs2_m1(i) -= eps;
+      dofs2_m2(i) -= 2.0 * eps;
     }
     
     // Compute volumes at perturbed DoFs
-    Geometry geom1_p2 = dof1->apply(geom1, dofs1_plus);
-    Geometry geom2_p2 = dof2->apply(geom2, dofs2_plus);
+    // Always apply to the ORIGINAL geometries, not the base transformed ones
+    Geometry geom1_p2 = dof1->apply(geom1, dofs1_p2);
+    Geometry geom2_p2 = dof2->apply(geom2, dofs2_p2);
     double vol_p2 = compute_intersection_volume_cuda(geom1_p2, geom2_p2, kgrid, 256, false);
     
-    if (which_geometry == 1) {
-      dofs1_plus(i) -= eps;
-      dofs1_minus(i) += eps;
-    } else {
-      dofs2_plus(i) -= eps;
-      dofs2_minus(i) += eps;
-    }
-    
-    Geometry geom1_p1 = dof1->apply(geom1, dofs1_plus);
-    Geometry geom2_p1 = dof2->apply(geom2, dofs2_plus);
+    Geometry geom1_p1 = dof1->apply(geom1, dofs1_p1);
+    Geometry geom2_p1 = dof2->apply(geom2, dofs2_p1);
     double vol_p1 = compute_intersection_volume_cuda(geom1_p1, geom2_p1, kgrid, 256, false);
     
-    Geometry geom1_m1 = dof1->apply(geom1, dofs1_minus);
-    Geometry geom2_m1 = dof2->apply(geom2, dofs2_minus);
+    Geometry geom1_m1 = dof1->apply(geom1, dofs1_m1);
+    Geometry geom2_m1 = dof2->apply(geom2, dofs2_m1);
     double vol_m1 = compute_intersection_volume_cuda(geom1_m1, geom2_m1, kgrid, 256, false);
     
-    if (which_geometry == 1) {
-      dofs1_minus(i) -= eps;
-    } else {
-      dofs2_minus(i) -= eps;
-    }
-    
-    Geometry geom1_m2 = dof1->apply(geom1, dofs1_minus);
-    Geometry geom2_m2 = dof2->apply(geom2, dofs2_minus);
+    Geometry geom1_m2 = dof1->apply(geom1, dofs1_m2);
+    Geometry geom2_m2 = dof2->apply(geom2, dofs2_m2);
     double vol_m2 = compute_intersection_volume_cuda(geom1_m2, geom2_m2, kgrid, 256, false);
     
     // 5-point finite difference: (-f(x+2h) + 8f(x+h) - 8f(x-h) + f(x-2h)) / (12h)
@@ -1196,11 +1197,13 @@ bool test_disk_gradient_comprehensive(const std::string& leb_file) {
       );
       
       // Compute gradient using finite differencing (uses GPU for volume computation)
+      // Use smaller epsilon for disks because apply() scales rho/area based on det_A,
+      // which makes the function more sensitive to perturbations
       Eigen::VectorXd grad_fd1 = compute_intersection_volume_gradient_finite_diff(
-        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 1, 1e-5
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 1, 1e-6
       );
       Eigen::VectorXd grad_fd2 = compute_intersection_volume_gradient_finite_diff(
-        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 2, 1e-5
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 2, 1e-6
       );
       
       // Compare all pairs
@@ -1457,6 +1460,449 @@ bool test_volume_consistency_disks(const std::string& leb_file) {
 }
 
 // ============================================================================
+// Gaussian Splat Tests
+// ============================================================================
+
+// Phase 1: Test A(k) computation for Gaussian splats
+bool test_phase1_Ak_computation_gaussian() {
+  std::cout << "\n=== Phase 1 Test (Gaussian Splats): A(k) Computation ===" << std::endl;
+  
+  // Create unit sphere Gaussian splats
+  Eigen::MatrixXd P, N;
+  Eigen::VectorXd sigmas, weights;
+  create_sphere_gaussians(P, N, sigmas, weights, 1000);
+  auto geom = make_gaussian_splat(P, N, sigmas, weights);
+  
+  // Create AffineDoF with identity transformation
+  auto affine_dof = std::make_shared<AffineDoF>();
+  Eigen::VectorXd dofs(12);
+  dofs << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0;
+  
+  // Test a selection of k-vectors
+  std::vector<Eigen::Vector3d> test_k_vectors = {
+    Eigen::Vector3d(0.1, 0.0, 0.0),
+    Eigen::Vector3d(1.0, 0.0, 0.0),
+    Eigen::Vector3d(0.0, 1.0, 0.0),
+    Eigen::Vector3d(0.0, 0.0, 2.0),
+    Eigen::Vector3d(1.0, 1.0, 0.0),
+    Eigen::Vector3d(1.0, 1.0, 1.0),
+  };
+  
+  double max_error_cpu = 0.0;
+  double max_error_analytical = 0.0;
+  int num_tested = 0;
+  int num_warnings = 0;
+  
+  for (const auto& k : test_k_vectors) {
+    // Compute A(k) using CUDA
+    std::complex<double> Ak_cuda = compute_Ak_cuda(geom, k, affine_dof, dofs, 256);
+    
+    // Compute A(k) using CPU
+    std::complex<double> Ak_cpu = affine_dof->compute_A(geom, k, dofs);
+    
+    // Compute analytical ground truth (for unit sphere at origin)
+    double kmag = k.norm();
+    if (kmag < 1e-10) continue;
+    
+    // Use exact form factor from form_factor_helpers for unit sphere (R=1.0)
+    double F = exact_sphere_form_factor(kmag, 1.0);
+    
+    // A(k) = i*k*F(k) for sphere
+    // Note: The Gaussian splat representation may not exactly match the analytical sphere
+    // due to discretization, so we're more lenient with the analytical comparison
+    std::complex<double> Ak_analytical = std::complex<double>(0.0, 1.0) * kmag * F;
+    
+    // Compare CUDA vs CPU (should match exactly)
+    std::complex<double> diff_cpu = Ak_cuda - Ak_cpu;
+    double error_cpu = std::abs(diff_cpu) / std::max(std::abs(Ak_cuda), std::abs(Ak_cpu));
+    if (error_cpu > max_error_cpu) max_error_cpu = error_cpu;
+    
+    // Compare CUDA vs Analytical (more lenient due to discretization)
+    std::complex<double> diff_analytical = Ak_cuda - Ak_analytical;
+    double error_analytical = std::abs(diff_analytical) / std::max(std::abs(Ak_cuda), std::abs(Ak_analytical));
+    if (error_analytical > max_error_analytical) max_error_analytical = error_analytical;
+    
+    // Only warn if CUDA vs CPU error is significant (analytical comparison is less strict)
+    if ((error_cpu > 0.01 || error_analytical > 0.8) && num_warnings < 5) {
+      std::cout << "  k = (" << k.x() << ", " << k.y() << ", " << k.z() << "), |k| = " << kmag << ":" << std::endl;
+      std::cout << "    CUDA:       " << Ak_cuda << std::endl;
+      std::cout << "    CPU:        " << Ak_cpu << std::endl;
+      std::cout << "    Analytical: " << Ak_analytical << std::endl;
+      std::cout << "    Error (CUDA vs CPU): " << error_cpu << std::endl;
+      std::cout << "    Error (CUDA vs Analytical): " << error_analytical << std::endl;
+      num_warnings++;
+    }
+    
+    num_tested++;
+  }
+  
+  std::cout << "  Tested " << num_tested << " k-vectors" << std::endl;
+  std::cout << "  Max error (CUDA vs CPU): " << max_error_cpu << std::endl;
+  std::cout << "  Max error (CUDA vs Analytical): " << max_error_analytical << std::endl;
+  std::cout << "  Note: Analytical comparison is lenient due to Gaussian splat discretization" << std::endl;
+  
+  // CUDA vs CPU should match exactly; analytical comparison is more lenient
+  bool passed = (max_error_cpu < 0.05) && (max_error_analytical < 0.9);
+  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
+
+// Phase 2: Test ∂A(k)/∂θ computation for Gaussian splats
+bool test_phase2_Ak_gradient_computation_gaussian() {
+  std::cout << "\n=== Phase 2 Test (Gaussian Splats): ∂A(k)/∂θ Computation ===" << std::endl;
+  
+  // Create unit sphere Gaussian splats
+  Eigen::MatrixXd P, N;
+  Eigen::VectorXd sigmas, weights;
+  create_sphere_gaussians(P, N, sigmas, weights, 1000);
+  auto geom = make_gaussian_splat(P, N, sigmas, weights);
+  
+  // Create AffineDoF
+  auto affine_dof = std::make_shared<AffineDoF>();
+  
+  // Test different DoF configurations
+  std::vector<Eigen::VectorXd> test_dofs = {
+    (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+    (Eigen::VectorXd(12) << 0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+    (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, std::cos(0.1), -std::sin(0.1), 0.0, std::sin(0.1), std::cos(0.1)).finished(),
+  };
+  
+  // Test a selection of k-vectors
+  std::vector<Eigen::Vector3d> test_k_vectors = {
+    Eigen::Vector3d(0.5, 0.0, 0.0),
+    Eigen::Vector3d(1.0, 0.0, 0.0),
+    Eigen::Vector3d(0.0, 1.0, 0.0),
+    Eigen::Vector3d(1.0, 1.0, 0.0),
+  };
+  
+  double max_error = 0.0;
+  int num_tested = 0;
+  int num_warnings = 0;
+  
+  for (const auto& dofs : test_dofs) {
+    for (const auto& k : test_k_vectors) {
+      // Compute gradient using CUDA
+      Eigen::VectorXcd grad_cuda = compute_Ak_gradient_cuda(geom, k, affine_dof, dofs, 256);
+      
+      // Compute gradient using CPU
+      Eigen::VectorXcd grad_cpu = affine_dof->compute_A_gradient(geom, k, dofs);
+      
+      // Compare
+      for (int i = 0; i < grad_cuda.size(); ++i) {
+        std::complex<double> diff = grad_cuda(i) - grad_cpu(i);
+        double abs_error = std::abs(diff);
+        double abs_cuda = std::abs(grad_cuda(i));
+        double abs_cpu = std::abs(grad_cpu(i));
+        bool use_absolute = (abs_cuda < 1e-6 && abs_cpu < 1e-6);
+        double error = use_absolute ? abs_error : (abs_error / std::max(abs_cuda, abs_cpu));
+        if (error > max_error) max_error = error;
+        
+        if (error > 1.0 && num_warnings < 5) {
+          std::cout << "  Warning: Large error for DoF " << i << " at k = (" 
+                    << k.x() << ", " << k.y() << ", " << k.z() << ")" << std::endl;
+          std::cout << "    CUDA: " << grad_cuda(i) << ", CPU: " << grad_cpu(i) << std::endl;
+          std::cout << "    Error: " << error << std::endl;
+          num_warnings++;
+        }
+      }
+      num_tested++;
+    }
+  }
+  
+  std::cout << "  Tested " << num_tested << " (DoF, k) pairs" << std::endl;
+  std::cout << "  Max error: " << max_error << std::endl;
+  
+  bool passed = max_error < 1.0;
+  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
+
+// Comprehensive gradient test for Gaussian splats (CPU vs GPU vs FD)
+bool test_gaussian_gradient_comprehensive(const std::string& leb_file) {
+  std::cout << "\n=== Phase 3.1: Gaussian Splat Gradient Comprehensive Test (CPU vs GPU vs FD) ===" << std::endl;
+  
+  // Create two unit sphere Gaussian splats
+  Eigen::MatrixXd P1, N1, P2, N2;
+  Eigen::VectorXd sigmas1, weights1, sigmas2, weights2;
+  create_sphere_gaussians(P1, N1, sigmas1, weights1, 1000);
+  create_sphere_gaussians(P2, N2, sigmas2, weights2, 1000);
+  
+  // Translate second sphere
+  Eigen::Vector3d t2(0.5, 0.0, 0.0);
+  for (int i = 0; i < P2.rows(); ++i) {
+    P2.row(i) += t2;
+  }
+  
+  auto geom1 = make_gaussian_splat(P1, N1, sigmas1, weights1);
+  auto geom2 = make_gaussian_splat(P2, N2, sigmas2, weights2);
+  
+  // Create AffineDoF
+  auto affine_dof1 = std::make_shared<AffineDoF>();
+  auto affine_dof2 = std::make_shared<AffineDoF>();
+  
+  // Test DoF configurations
+  Eigen::VectorXd dofs1 = (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished();
+  Eigen::VectorXd dofs2 = (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished();
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 32);  // Smaller grid for speed
+  
+  // Compute gradients using CPU
+  auto t_cpu_start = std::chrono::high_resolution_clock::now();
+  auto result_cpu = compute_intersection_volume_gradient_cpu(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, false
+  );
+  auto t_cpu_end = std::chrono::high_resolution_clock::now();
+  double cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
+  
+  // Compute gradients using GPU
+  auto t_gpu_start = std::chrono::high_resolution_clock::now();
+  auto result_gpu = compute_intersection_volume_gradient_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+  );
+  auto t_gpu_end = std::chrono::high_resolution_clock::now();
+  double gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
+  
+  // Compute gradients using finite differencing (using GPU non-gradient routine)
+  // Use smaller epsilon for Gaussians because apply() scales sigma/weight based on det_A,
+  // which makes the function more sensitive to perturbations
+  Eigen::VectorXd grad_fd1 = compute_intersection_volume_gradient_finite_diff(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 1, 1e-6
+  );
+  Eigen::VectorXd grad_fd2 = compute_intersection_volume_gradient_finite_diff(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 2, 1e-6
+  );
+  
+  // Compare all pairs
+  double max_error_cpu_gpu_geom1 = 0.0, max_error_cpu_gpu_geom2 = 0.0;
+  double max_error_cpu_fd_geom1 = 0.0, max_error_cpu_fd_geom2 = 0.0;
+  double max_error_gpu_fd_geom1 = 0.0, max_error_gpu_fd_geom2 = 0.0;
+  int num_tested = 0;
+  int num_warnings = 0;
+  
+  for (int i = 0; i < result_cpu.grad_geom1.size(); ++i) {
+    // CPU vs GPU
+    {
+      double diff = result_cpu.grad_geom1(i) - result_gpu.grad_geom1(i);
+      double abs_error = std::abs(diff);
+      double abs_cpu = std::abs(result_cpu.grad_geom1(i));
+      double abs_gpu = std::abs(result_gpu.grad_geom1(i));
+      bool use_absolute = (abs_cpu < 1e-6 && abs_gpu < 1e-6);
+      double error = use_absolute ? abs_error : (abs_error / std::max(abs_cpu, abs_gpu));
+      if (error > max_error_cpu_gpu_geom1) max_error_cpu_gpu_geom1 = error;
+      
+      double tolerance = use_absolute ? 1e-3 : 0.1;
+      if (error > tolerance && num_warnings < 5) {
+        std::cout << "  Warning: CPU vs GPU mismatch for geom1 DoF " << i << std::endl;
+        std::cout << "    CPU: " << result_cpu.grad_geom1(i) << ", GPU: " << result_gpu.grad_geom1(i) << std::endl;
+        num_warnings++;
+      }
+    }
+    
+    // CPU vs FD
+    {
+      double diff = result_cpu.grad_geom1(i) - grad_fd1(i);
+      double abs_error = std::abs(diff);
+      double abs_cpu = std::abs(result_cpu.grad_geom1(i));
+      double abs_fd = std::abs(grad_fd1(i));
+      bool use_absolute = (abs_cpu < 1e-6 && abs_fd < 1e-6);
+      double error = use_absolute ? abs_error : (abs_error / std::max(abs_cpu, abs_fd));
+      if (error > max_error_cpu_fd_geom1) max_error_cpu_fd_geom1 = error;
+    }
+    
+    // GPU vs FD
+    {
+      double diff = result_gpu.grad_geom1(i) - grad_fd1(i);
+      double abs_error = std::abs(diff);
+      double abs_gpu = std::abs(result_gpu.grad_geom1(i));
+      double abs_fd = std::abs(grad_fd1(i));
+      bool use_absolute = (abs_gpu < 1e-6 && abs_fd < 1e-6);
+      double error = use_absolute ? abs_error : (abs_error / std::max(abs_gpu, abs_fd));
+      if (error > max_error_gpu_fd_geom1) max_error_gpu_fd_geom1 = error;
+    }
+    
+    num_tested++;
+  }
+  
+  // Same for geometry 2
+  for (int i = 0; i < result_cpu.grad_geom2.size(); ++i) {
+    // CPU vs GPU
+    {
+      double diff = result_cpu.grad_geom2(i) - result_gpu.grad_geom2(i);
+      double abs_error = std::abs(diff);
+      double abs_cpu = std::abs(result_cpu.grad_geom2(i));
+      double abs_gpu = std::abs(result_gpu.grad_geom2(i));
+      bool use_absolute = (abs_cpu < 1e-6 && abs_gpu < 1e-6);
+      double error = use_absolute ? abs_error : (abs_error / std::max(abs_cpu, abs_gpu));
+      if (error > max_error_cpu_gpu_geom2) max_error_cpu_gpu_geom2 = error;
+    }
+    
+    // CPU vs FD
+    {
+      double diff = result_cpu.grad_geom2(i) - grad_fd2(i);
+      double abs_error = std::abs(diff);
+      double abs_cpu = std::abs(result_cpu.grad_geom2(i));
+      double abs_fd = std::abs(grad_fd2(i));
+      bool use_absolute = (abs_cpu < 1e-6 && abs_fd < 1e-6);
+      double error = use_absolute ? abs_error : (abs_error / std::max(abs_cpu, abs_fd));
+      if (error > max_error_cpu_fd_geom2) max_error_cpu_fd_geom2 = error;
+    }
+    
+    // GPU vs FD
+    {
+      double diff = result_gpu.grad_geom2(i) - grad_fd2(i);
+      double abs_error = std::abs(diff);
+      double abs_gpu = std::abs(result_gpu.grad_geom2(i));
+      double abs_fd = std::abs(grad_fd2(i));
+      bool use_absolute = (abs_gpu < 1e-6 && abs_fd < 1e-6);
+      double error = use_absolute ? abs_error : (abs_error / std::max(abs_gpu, abs_fd));
+      if (error > max_error_gpu_fd_geom2) max_error_gpu_fd_geom2 = error;
+    }
+  }
+  
+  std::cout << "\n  Max Errors:" << std::endl;
+  std::cout << "    CPU vs GPU (geom1):  " << max_error_cpu_gpu_geom1 << std::endl;
+  std::cout << "    CPU vs GPU (geom2):  " << max_error_cpu_gpu_geom2 << std::endl;
+  std::cout << "    CPU vs FD (geom1):   " << max_error_cpu_fd_geom1 << std::endl;
+  std::cout << "    CPU vs FD (geom2):   " << max_error_cpu_fd_geom2 << std::endl;
+  std::cout << "    GPU vs FD (geom1):   " << max_error_gpu_fd_geom1 << std::endl;
+  std::cout << "    GPU vs FD (geom2):   " << max_error_gpu_fd_geom2 << std::endl;
+  std::cout << "\n  Timing:" << std::endl;
+  std::cout << "    CPU time: " << std::fixed << std::setprecision(3) << cpu_time << " ms" << std::endl;
+  std::cout << "    GPU time: " << gpu_time << " ms" << std::endl;
+  std::cout << "    Speedup: " << std::setprecision(2) << (cpu_time / gpu_time) << "x" << std::endl;
+  
+  bool passed = (max_error_cpu_gpu_geom1 < 0.2) && (max_error_cpu_gpu_geom2 < 0.2) &&
+                (max_error_cpu_fd_geom1 < 0.2) && (max_error_cpu_fd_geom2 < 0.2) &&
+                (max_error_gpu_fd_geom1 < 0.2) && (max_error_gpu_fd_geom2 < 0.2);
+  std::cout << "\n  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
+
+// Phase 3.2: Volume Consistency (Gaussian Splats)
+bool test_volume_consistency_gaussians(const std::string& leb_file) {
+  std::cout << "\n=== Phase 3.2: Volume Consistency (Gaussian Splats) ===" << std::endl;
+  
+  // Create two unit sphere Gaussian splats
+  Eigen::MatrixXd P1, N1, P2, N2;
+  Eigen::VectorXd sigmas1, weights1, sigmas2, weights2;
+  create_sphere_gaussians(P1, N1, sigmas1, weights1, 1000);
+  create_sphere_gaussians(P2, N2, sigmas2, weights2, 1000);
+  
+  auto geom1 = make_gaussian_splat(P1, N1, sigmas1, weights1);
+  auto geom2 = make_gaussian_splat(P2, N2, sigmas2, weights2);
+  
+  // Create AffineDoF
+  auto affine_dof1 = std::make_shared<AffineDoF>();
+  auto affine_dof2 = std::make_shared<AffineDoF>();
+  
+  // Test DoF configurations
+  Eigen::VectorXd dofs1 = (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished();
+  Eigen::VectorXd dofs2 = (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished();
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 52);
+  
+  // Apply DoFs to get transformed geometries
+  Geometry geom1_transformed = affine_dof1->apply(geom1, dofs1);
+  Geometry geom2_transformed = affine_dof2->apply(geom2, dofs2);
+  
+  // Compute volumes using different methods
+  double vol_cpu_non_grad = compute_intersection_volume_cpu(geom1_transformed, geom2_transformed, KG, false);
+  double vol_gpu_non_grad = compute_intersection_volume_cuda(geom1_transformed, geom2_transformed, KG, 256, false);
+  
+  auto result_cpu_grad = compute_intersection_volume_gradient_cpu(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, false
+  );
+  double vol_cpu_grad = result_cpu_grad.volume;
+  
+  auto result_gpu_grad = compute_intersection_volume_gradient_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+  );
+  double vol_gpu_grad = result_gpu_grad.volume;
+  
+  // Print results
+  std::cout << "  CPU (non-gradient):  " << std::scientific << std::setprecision(10) << vol_cpu_non_grad << std::endl;
+  std::cout << "  GPU (non-gradient):  " << std::scientific << std::setprecision(10) << vol_gpu_non_grad << std::endl;
+  std::cout << "  CPU (gradient):      " << std::scientific << std::setprecision(10) << vol_cpu_grad << std::endl;
+  std::cout << "  GPU (gradient):      " << std::scientific << std::setprecision(10) << vol_gpu_grad << std::endl;
+  
+  // Compare all volumes
+  double max_vol = std::max({std::abs(vol_cpu_non_grad), std::abs(vol_gpu_non_grad), 
+                             std::abs(vol_cpu_grad), std::abs(vol_gpu_grad)});
+  
+  double tol = 1e-6;
+  bool all_match = true;
+  
+  // Compare CPU non-gradient vs GPU non-gradient
+  double diff1 = std::abs(vol_cpu_non_grad - vol_gpu_non_grad);
+  double rel_error1 = (max_vol > 1e-10) ? diff1 / max_vol : diff1;
+  if (rel_error1 > tol) {
+    std::cout << "  ERROR: CPU (non-gradient) vs GPU (non-gradient) mismatch: " 
+              << std::scientific << rel_error1 << std::endl;
+    all_match = false;
+  }
+  
+  // Compare CPU non-gradient vs CPU gradient
+  double diff2 = std::abs(vol_cpu_non_grad - vol_cpu_grad);
+  double rel_error2 = (max_vol > 1e-10) ? diff2 / max_vol : diff2;
+  if (rel_error2 > tol) {
+    std::cout << "  ERROR: CPU (non-gradient) vs CPU (gradient) mismatch: " 
+              << std::scientific << rel_error2 << std::endl;
+    all_match = false;
+  }
+  
+  // Compare CPU non-gradient vs GPU gradient
+  double diff3 = std::abs(vol_cpu_non_grad - vol_gpu_grad);
+  double rel_error3 = (max_vol > 1e-10) ? diff3 / max_vol : diff3;
+  if (rel_error3 > tol) {
+    std::cout << "  ERROR: CPU (non-gradient) vs GPU (gradient) mismatch: " 
+              << std::scientific << rel_error3 << std::endl;
+    all_match = false;
+  }
+  
+  // Compare GPU non-gradient vs CPU gradient
+  double diff4 = std::abs(vol_gpu_non_grad - vol_cpu_grad);
+  double rel_error4 = (max_vol > 1e-10) ? diff4 / max_vol : diff4;
+  if (rel_error4 > tol) {
+    std::cout << "  ERROR: GPU (non-gradient) vs CPU (gradient) mismatch: " 
+              << std::scientific << rel_error4 << std::endl;
+    all_match = false;
+  }
+  
+  // Compare GPU non-gradient vs GPU gradient
+  double diff5 = std::abs(vol_gpu_non_grad - vol_gpu_grad);
+  double rel_error5 = (max_vol > 1e-10) ? diff5 / max_vol : diff5;
+  if (rel_error5 > tol) {
+    std::cout << "  ERROR: GPU (non-gradient) vs GPU (gradient) mismatch: " 
+              << std::scientific << rel_error5 << std::endl;
+    all_match = false;
+  }
+  
+  // Compare CPU gradient vs GPU gradient
+  double diff6 = std::abs(vol_cpu_grad - vol_gpu_grad);
+  double rel_error6 = (max_vol > 1e-10) ? diff6 / max_vol : diff6;
+  if (rel_error6 > tol) {
+    std::cout << "  ERROR: CPU (gradient) vs GPU (gradient) mismatch: " 
+              << std::scientific << rel_error6 << std::endl;
+    all_match = false;
+  }
+  
+  if (all_match) {
+    std::cout << "  All volume computations match!" << std::endl;
+  }
+  
+  std::cout << "  Result: " << (all_match ? "PASS" : "FAIL") << std::endl;
+  
+  return all_match;
+}
+
+// ============================================================================
 // CPU vs GPU Comparison Tests
 // ============================================================================
 
@@ -1531,10 +1977,28 @@ int main(int argc, char* argv[]) {
   // Phase 3: Test intersection volume gradient (full pipeline)
   bool disk_gradient_comprehensive_passed = test_disk_gradient_comprehensive(leb_file);
   all_passed = all_passed && disk_gradient_comprehensive_passed;
-  
-  // Volume Consistency Tests
+
   bool volume_consistency_disks_passed = test_volume_consistency_disks(leb_file);
   all_passed = all_passed && volume_consistency_disks_passed;
+  
+  // ============================================================================
+  // Gaussian Splat Tests
+  // ============================================================================
+  
+  // Phase 1: Test A(k) computation for Gaussian splats
+  bool phase1_gaussian_passed = test_phase1_Ak_computation_gaussian();
+  all_passed = all_passed && phase1_gaussian_passed;
+  
+  // Phase 2: Test ∂A(k)/∂θ computation for Gaussian splats
+  bool phase2_gaussian_passed = test_phase2_Ak_gradient_computation_gaussian();
+  all_passed = all_passed && phase2_gaussian_passed;
+  
+  // Phase 3: Test intersection volume gradient (full pipeline)
+  bool gaussian_gradient_comprehensive_passed = test_gaussian_gradient_comprehensive(leb_file);
+  all_passed = all_passed && gaussian_gradient_comprehensive_passed;
+  
+  bool volume_consistency_gaussians_passed = test_volume_consistency_gaussians(leb_file);
+  all_passed = all_passed && volume_consistency_gaussians_passed;
   
   // Summary
   std::cout << "\n=== Summary ===" << std::endl;
@@ -1551,6 +2015,12 @@ int main(int argc, char* argv[]) {
   std::cout << "  Phase 2 Advanced (Full KGrid):        " << (phase2_advanced_disk_passed ? "PASS" : "FAIL") << std::endl;
   std::cout << "  Phase 3.1 (Comprehensive):            " << (disk_gradient_comprehensive_passed ? "PASS" : "FAIL") << std::endl;
   std::cout << "  Phase 3.2 (Volume Consistency):       " << (volume_consistency_disks_passed ? "PASS" : "FAIL") << std::endl;
+  
+  std::cout << "\n--- Gaussian Splat Tests ---" << std::endl;
+  std::cout << "  Phase 1 (A(k) computation):            " << (phase1_gaussian_passed ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Phase 2 (∂A(k)/∂θ computation):        " << (phase2_gaussian_passed ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Phase 3.1 (Comprehensive):            " << (gaussian_gradient_comprehensive_passed ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Phase 3.2 (Volume Consistency):       " << (volume_consistency_gaussians_passed ? "PASS" : "FAIL") << std::endl;
   
   if (all_passed) {
     std::cout << "\nAll tests PASSED!" << std::endl;

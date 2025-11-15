@@ -53,6 +53,26 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
   int Q,
   double2* grad_A
 );
+
+extern "C" __global__ void compute_A_affine_gaussian_kernel(
+  const GaussianPacked* __restrict__ gaussians,
+  int num_gaussians,
+  const double3* __restrict__ kdirs,
+  const double* __restrict__ kmags,
+  const double* __restrict__ dof_params,
+  int Q,
+  double2* A_out
+);
+
+extern "C" __global__ void compute_A_gradient_affine_gaussian_kernel(
+  const GaussianPacked* __restrict__ gaussians,
+  int num_gaussians,
+  const double3* __restrict__ kdirs,
+  const double* __restrict__ kmags,
+  const double* __restrict__ dof_params,
+  int Q,
+  double2* grad_A
+);
 #endif // AFFINE_DOF_CUDA_KERNELS_DEFINED
 #endif // __CUDACC__
 
@@ -99,7 +119,27 @@ void compute_Ak_gradient_affine_disk_cuda_wrapper(
   int blockSize
 );
 
-// Register AffineDoF CUDA kernels (for both triangles and disks)
+// Compute A(k) for all k-points using CUDA (for Gaussian splats)
+// Wrapper around compute_A_affine_gaussian_kernel
+void compute_Ak_affine_gaussian_cuda_wrapper(
+  const Geometry& geom,
+  const KGrid& kgrid,
+  const Eigen::VectorXd& dofs,
+  double2* d_A_out,
+  int blockSize
+);
+
+// Compute ∂A(k)/∂θ for all k-points using CUDA (for Gaussian splats)
+// Wrapper around compute_A_gradient_affine_gaussian_kernel
+void compute_Ak_gradient_affine_gaussian_cuda_wrapper(
+  const Geometry& geom,
+  const KGrid& kgrid,
+  const Eigen::VectorXd& dofs,
+  double2* d_grad_A_out,
+  int blockSize
+);
+
+// Register AffineDoF CUDA kernels (for triangles, disks, and Gaussian splats)
 // This should be called once, typically in a static initializer
 void register_affine_dof_cuda_kernels();
 
