@@ -13,13 +13,15 @@
 #include "compute_intersection_volume.hpp"
 #include "geometry/geometry.hpp"
 #include "geometry/types.hpp"
-#include "dof/affine_dof.hpp"
-#include "dof/triangle_mesh_dof.hpp"
-#include "dof/cuda/affine_dof_cuda.hpp"
+#include "dof/dof_parameterization.hpp"
+#include "dof/cuda/dof_cuda_interface.hpp"
+#include "quadrature/kgrid.hpp"
 
 using PoIntInt::TriPacked;
 using PoIntInt::DiskPacked;
 using PoIntInt::GaussianPacked;
+using PoIntInt::CudaKernelRegistry;
+using PoIntInt::get_dof_type_name;
 
 // ===================== Phase 2: Compute Intersection Volume Gradient =====================
 
@@ -94,13 +96,8 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   IntersectionVolumeGradientResult result;
   
   // Device memory pointers (initialized to nullptr)
-  TriPacked* d_tris1 = nullptr;
-  TriPacked* d_tris2 = nullptr;
-  double3* d_kdirs = nullptr;
-  double* d_kmags = nullptr;
+  // Note: Wrapper functions handle their own temporary allocations for geometry data, k-grid, and DoFs
   double* d_weights = nullptr;
-  double* d_dofs1 = nullptr;
-  double* d_dofs2 = nullptr;
   double2* d_A1 = nullptr;
   double2* d_A2 = nullptr;
   double2* d_grad_A1 = nullptr;
@@ -110,9 +107,6 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   double* d_volume = nullptr;
   
   // Host vectors
-  std::vector<double3> h_kdirs;
-  std::vector<double> h_dofs1, h_dofs2;
-  std::vector<double2> h_A1, h_A2;
   std::vector<double> h_grad_V1, h_grad_V2;
   
   // Timing variables
@@ -131,16 +125,13 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   auto t_end = std::chrono::high_resolution_clock::now();
   
   // Grid/block dimensions
-  dim3 grid_grad, block_grad, grid_vol_grad, block_vol_grad;
-  dim3 grid_A, block_A;  // For Phase 1 kernel launches
-  
-  // Transformed geometries (for volume computation)
-  Geometry geom1_transformed, geom2_transformed;
+  dim3 grid_vol_grad, block_vol_grad;
   
   // Other variables
   int NF1 = 0, NF2 = 0;
   int Q = 0;
   int num_dofs1 = 0, num_dofs2 = 0;
+  std::string dof_type1, dof_type2;  // DoF type names (for profiling)
   
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
@@ -150,21 +141,34 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
     } \
   } while(0)
   
-  // Check DoF types - for now, only support AffineDoF
-  // TODO: Add support for TriangleMeshDoF and other DoF types
-  auto affine_dof1 = std::dynamic_pointer_cast<AffineDoF>(dof1);
-  auto affine_dof2 = std::dynamic_pointer_cast<AffineDoF>(dof2);
+  // Get DoF type names and check if CUDA kernels are available
+  dof_type1 = get_dof_type_name(dof1);
+  dof_type2 = get_dof_type_name(dof2);
   
-  if (!affine_dof1 || !affine_dof2) {
-    std::cerr << "Error: Only AffineDoF is currently supported for CUDA gradient computation" << std::endl;
+  if (!CudaKernelRegistry::has_kernels(dof_type1, geom1.type)) {
+    std::cerr << "Error: No CUDA kernels registered for DoF type '" << dof_type1 
+              << "' with geometry type " << (int)geom1.type << std::endl;
     result.grad_geom1 = Eigen::VectorXd::Zero(dofs1.size());
     result.grad_geom2 = Eigen::VectorXd::Zero(dofs2.size());
     result.volume = 0.0;
     return result;
   }
   
-  if (dofs1.size() != 12 || dofs2.size() != 12) {
-    std::cerr << "Error: AffineDoF requires 12 DoFs" << std::endl;
+  if (!CudaKernelRegistry::has_kernels(dof_type2, geom2.type)) {
+    std::cerr << "Error: No CUDA kernels registered for DoF type '" << dof_type2 
+              << "' with geometry type " << (int)geom2.type << std::endl;
+    result.grad_geom1 = Eigen::VectorXd::Zero(dofs1.size());
+    result.grad_geom2 = Eigen::VectorXd::Zero(dofs2.size());
+    result.volume = 0.0;
+    return result;
+  }
+  
+  // Get registered kernel functions
+  auto kernels1 = CudaKernelRegistry::get_kernels(dof_type1, geom1.type);
+  auto kernels2 = CudaKernelRegistry::get_kernels(dof_type2, geom2.type);
+  
+  if (!kernels1.first || !kernels1.second || !kernels2.first || !kernels2.second) {
+    std::cerr << "Error: Failed to retrieve CUDA kernel functions from registry" << std::endl;
     result.grad_geom1 = Eigen::VectorXd::Zero(dofs1.size());
     result.grad_geom2 = Eigen::VectorXd::Zero(dofs2.size());
     result.volume = 0.0;
@@ -172,10 +176,10 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   }
   
   Q = (int)kgrid.kmag.size();
-  num_dofs1 = 12;
-  num_dofs2 = 12;
+  num_dofs1 = (int)dofs1.size();
+  num_dofs2 = (int)dofs2.size();
   
-  // For now, only support triangle meshes
+  // Check geometry types - for now, only support triangle meshes
   // TODO: Add support for disks and Gaussian splats
   if (geom1.type != GEOM_TRIANGLE || geom2.type != GEOM_TRIANGLE) {
     std::cerr << "Error: Only triangle meshes are currently supported for CUDA gradient computation" << std::endl;
@@ -185,42 +189,21 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
     return result;
   }
   
-  t_alloc_start = std::chrono::high_resolution_clock::now();
-  
-  // Allocate geometry data
+  // Get geometry sizes for profiling
   NF1 = (int)geom1.tris.size();
   NF2 = (int)geom2.tris.size();
   
-  if (NF1 > 0) {
-    CUDA_CHECK(cudaMalloc(&d_tris1, NF1 * sizeof(TriPacked)));
-  } else {
-    CUDA_CHECK(cudaMalloc(&d_tris1, sizeof(TriPacked)));
-  }
+  t_alloc_start = std::chrono::high_resolution_clock::now();
   
-  if (NF2 > 0) {
-    CUDA_CHECK(cudaMalloc(&d_tris2, NF2 * sizeof(TriPacked)));
-  } else {
-    CUDA_CHECK(cudaMalloc(&d_tris2, sizeof(TriPacked)));
-  }
-  
-  // Allocate k-grid data
-  h_kdirs.resize(Q);
-  for (int q = 0; q < Q; ++q) {
-    h_kdirs[q] = make_double3(kgrid.dirs[q][0], kgrid.dirs[q][1], kgrid.dirs[q][2]);
-  }
-  CUDA_CHECK(cudaMalloc(&d_kdirs, Q * sizeof(double3)));
-  CUDA_CHECK(cudaMalloc(&d_kmags, Q * sizeof(double)));
-  CUDA_CHECK(cudaMalloc(&d_weights, Q * sizeof(double)));
-  
-  // Allocate DoF parameters
-  CUDA_CHECK(cudaMalloc(&d_dofs1, num_dofs1 * sizeof(double)));
-  CUDA_CHECK(cudaMalloc(&d_dofs2, num_dofs2 * sizeof(double)));
-  
+  // Allocate output buffers (wrapper functions handle their own temporary allocations)
   // Allocate form factors and gradients
   CUDA_CHECK(cudaMalloc(&d_A1, Q * sizeof(double2)));
   CUDA_CHECK(cudaMalloc(&d_A2, Q * sizeof(double2)));
   CUDA_CHECK(cudaMalloc(&d_grad_A1, Q * num_dofs1 * sizeof(double2)));
   CUDA_CHECK(cudaMalloc(&d_grad_A2, Q * num_dofs2 * sizeof(double2)));
+  
+  // Allocate k-grid weights (needed for Phase 3)
+  CUDA_CHECK(cudaMalloc(&d_weights, Q * sizeof(double)));
   
   // Allocate output gradients and volume
   CUDA_CHECK(cudaMalloc(&d_grad_V1, num_dofs1 * sizeof(double)));
@@ -230,29 +213,8 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   t_alloc_end = std::chrono::high_resolution_clock::now();
   t_memcpy_start = std::chrono::high_resolution_clock::now();
   
-  // Copy data to device
-  if (NF1 > 0) {
-    CUDA_CHECK(cudaMemcpy(d_tris1, geom1.tris.data(), NF1 * sizeof(TriPacked), cudaMemcpyHostToDevice));
-  }
-  if (NF2 > 0) {
-    CUDA_CHECK(cudaMemcpy(d_tris2, geom2.tris.data(), NF2 * sizeof(TriPacked), cudaMemcpyHostToDevice));
-  }
-  
-  CUDA_CHECK(cudaMemcpy(d_kdirs, h_kdirs.data(), Q * sizeof(double3), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_kmags, kgrid.kmag.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
+  // Copy k-grid weights to device (wrapper functions handle kdirs and kmags)
   CUDA_CHECK(cudaMemcpy(d_weights, kgrid.w.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
-  
-  // Copy DoFs
-  h_dofs1.resize(num_dofs1);
-  h_dofs2.resize(num_dofs2);
-  for (int i = 0; i < num_dofs1; ++i) {
-    h_dofs1[i] = dofs1(i);
-  }
-  for (int i = 0; i < num_dofs2; ++i) {
-    h_dofs2[i] = dofs2(i);
-  }
-  CUDA_CHECK(cudaMemcpy(d_dofs1, h_dofs1.data(), num_dofs1 * sizeof(double), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_dofs2, h_dofs2.data(), num_dofs2 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Initialize gradients and volume to zero
   CUDA_CHECK(cudaMemset(d_grad_V1, 0, num_dofs1 * sizeof(double)));
@@ -262,35 +224,23 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   t_memcpy_end = std::chrono::high_resolution_clock::now();
   t_kernel1_start = std::chrono::high_resolution_clock::now();
   
-  // Phase 1: Compute A(k) for both geometries using CUDA
-  grid_A = dim3(Q, 1);
-  block_A = dim3(blockSize);
-  
-  compute_A_affine_triangle_kernel<<<grid_A, block_A>>>(
-    d_tris1, NF1, d_kdirs, d_kmags, d_dofs1, Q, d_A1
-  );
+  // Phase 1: Compute A(k) for both geometries using registered CUDA kernels
+  // Create temporary KGrid structures for the wrapper functions
+  // Note: The wrapper functions handle all memory allocation and kernel launches internally
+  kernels1.first(geom1, kgrid, dofs1, d_A1, blockSize);
   CUDA_CHECK(cudaDeviceSynchronize());
   
-  compute_A_affine_triangle_kernel<<<grid_A, block_A>>>(
-    d_tris2, NF2, d_kdirs, d_kmags, d_dofs2, Q, d_A2
-  );
+  kernels2.first(geom2, kgrid, dofs2, d_A2, blockSize);
   CUDA_CHECK(cudaDeviceSynchronize());
   
   t_kernel1_end = std::chrono::high_resolution_clock::now();
   t_kernel2_start = std::chrono::high_resolution_clock::now();
   
-  // Phase 2: Compute ∂A(k)/∂θ for both geometries
-  grid_grad = dim3((Q + blockSize - 1) / blockSize);
-  block_grad = dim3(blockSize);
-  
-  compute_A_gradient_affine_triangle_kernel<<<grid_grad, block_grad>>>(
-    d_tris1, NF1, d_kdirs, d_kmags, d_dofs1, Q, d_grad_A1
-  );
+  // Phase 2: Compute ∂A(k)/∂θ for both geometries using registered CUDA kernels
+  kernels1.second(geom1, kgrid, dofs1, d_grad_A1, blockSize);
   CUDA_CHECK(cudaDeviceSynchronize());
   
-  compute_A_gradient_affine_triangle_kernel<<<grid_grad, block_grad>>>(
-    d_tris2, NF2, d_kdirs, d_kmags, d_dofs2, Q, d_grad_A2
-  );
+  kernels2.second(geom2, kgrid, dofs2, d_grad_A2, blockSize);
   CUDA_CHECK(cudaDeviceSynchronize());
   
   t_kernel2_end = std::chrono::high_resolution_clock::now();
@@ -345,8 +295,8 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
     
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "\n=== CUDA Intersection Volume Gradient Profiler ===" << std::endl;
-    std::cout << "Geometry 1: " << NF1 << " triangles" << std::endl;
-    std::cout << "Geometry 2: " << NF2 << " triangles" << std::endl;
+    std::cout << "Geometry 1: " << dof_type1 << " with " << NF1 << " triangles" << std::endl;
+    std::cout << "Geometry 2: " << dof_type2 << " with " << NF2 << " triangles" << std::endl;
     std::cout << "K-grid nodes: " << Q << std::endl;
     std::cout << "DoFs per geometry: " << num_dofs1 << ", " << num_dofs2 << std::endl;
     std::cout << "--- Timing (ms) ---" << std::endl;
@@ -361,13 +311,7 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   }
   
 cleanup:
-  if (d_tris1) cudaFree(d_tris1);
-  if (d_tris2) cudaFree(d_tris2);
-  if (d_kdirs) cudaFree(d_kdirs);
-  if (d_kmags) cudaFree(d_kmags);
   if (d_weights) cudaFree(d_weights);
-  if (d_dofs1) cudaFree(d_dofs1);
-  if (d_dofs2) cudaFree(d_dofs2);
   if (d_A1) cudaFree(d_A1);
   if (d_A2) cudaFree(d_A2);
   if (d_grad_A1) cudaFree(d_grad_A1);
@@ -392,43 +336,35 @@ std::complex<double> compute_Ak_cuda(
   const Eigen::VectorXd& dofs,
   int blockSize)
 {
-  // Only support AffineDoF with triangle meshes for now
-  if (geom.type != GEOM_TRIANGLE) {
-    std::cerr << "Error: Only triangle meshes are currently supported" << std::endl;
+  // Get DoF type name and check if CUDA kernels are available
+  std::string dof_type = get_dof_type_name(dof);
+  
+  if (!CudaKernelRegistry::has_kernels(dof_type, geom.type)) {
+    std::cerr << "Error: No CUDA kernels registered for DoF type '" << dof_type 
+              << "' with geometry type " << (int)geom.type << std::endl;
     return std::complex<double>(0.0, 0.0);
   }
   
-  auto affine_dof = std::dynamic_pointer_cast<AffineDoF>(dof);
-  if (!affine_dof) {
-    std::cerr << "Error: Only AffineDoF is currently supported" << std::endl;
+  // Get registered kernel function
+  auto kernels = CudaKernelRegistry::get_kernels(dof_type, geom.type);
+  
+  if (!kernels.first) {
+    std::cerr << "Error: Failed to retrieve CUDA kernel function from registry" << std::endl;
     return std::complex<double>(0.0, 0.0);
   }
-  
-  if (dofs.size() != 12) {
-    std::cerr << "Error: AffineDoF requires 12 DoFs" << std::endl;
-    return std::complex<double>(0.0, 0.0);
-  }
-  
-  int NF = (int)geom.tris.size();
-  if (NF == 0) return std::complex<double>(0.0, 0.0);
   
   // Prepare k-vector
   double kmag = k.norm();
   if (kmag < 1e-10) return std::complex<double>(0.0, 0.0);
   
-  Eigen::Vector3d khat = k / kmag;
-  double3 kdir = make_double3(khat.x(), khat.y(), khat.z());
-  double kmag_d = kmag;
+  // Create a single-point KGrid
+  KGrid single_kgrid;
+  single_kgrid.dirs.push_back({k.x() / kmag, k.y() / kmag, k.z() / kmag});
+  single_kgrid.kmag.push_back(kmag);
+  single_kgrid.w.push_back(1.0);
   
-  // Declare all variables at the top (before any goto cleanup)
-  TriPacked* d_tris = nullptr;
-  double* d_dofs = nullptr;
+  // Allocate output buffer
   double2* d_A = nullptr;
-  double3* d_kdirs = nullptr;
-  double* d_kmags = nullptr;
-  std::vector<double> h_dofs(12);
-  dim3 grid(1);
-  dim3 block(blockSize);
   double2 h_A = make_double2(0.0, 0.0);
   
   #define CUDA_CHECK(call) do { \
@@ -439,37 +375,17 @@ std::complex<double> compute_Ak_cuda(
     } \
   } while(0)
   
-  CUDA_CHECK(cudaMalloc(&d_tris, NF * sizeof(TriPacked)));
-  CUDA_CHECK(cudaMalloc(&d_dofs, 12 * sizeof(double)));
   CUDA_CHECK(cudaMalloc(&d_A, sizeof(double2)));
-  CUDA_CHECK(cudaMalloc(&d_kdirs, sizeof(double3)));
-  CUDA_CHECK(cudaMalloc(&d_kmags, sizeof(double)));
   
-  // Copy data to device
-  CUDA_CHECK(cudaMemcpy(d_tris, geom.tris.data(), NF * sizeof(TriPacked), cudaMemcpyHostToDevice));
-  
-  for (int i = 0; i < 12; ++i) {
-    h_dofs[i] = dofs(i);
-  }
-  CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_kdirs, &kdir, sizeof(double3), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_kmags, &kmag_d, sizeof(double), cudaMemcpyHostToDevice));
-  
-  // Launch kernel (single k-point, so Q=1)
-  compute_A_affine_triangle_kernel<<<grid, block>>>(
-    d_tris, NF, d_kdirs, d_kmags, d_dofs, 1, d_A
-  );
+  // Call registered kernel wrapper
+  kernels.first(geom, single_kgrid, dofs, d_A, blockSize);
   CUDA_CHECK(cudaDeviceSynchronize());
   
   // Copy result back
   CUDA_CHECK(cudaMemcpy(&h_A, d_A, sizeof(double2), cudaMemcpyDeviceToHost));
   
   cleanup:
-  if (d_tris) cudaFree(d_tris);
-  if (d_dofs) cudaFree(d_dofs);
   if (d_A) cudaFree(d_A);
-  if (d_kdirs) cudaFree(d_kdirs);
-  if (d_kmags) cudaFree(d_kmags);
   
   #undef CUDA_CHECK
   
@@ -487,45 +403,39 @@ Eigen::VectorXcd compute_Ak_gradient_cuda(
   const Eigen::VectorXd& dofs,
   int blockSize)
 {
-  // Only support AffineDoF with triangle meshes for now
-  if (geom.type != GEOM_TRIANGLE) {
-    std::cerr << "Error: Only triangle meshes are currently supported" << std::endl;
+  // Get DoF type name and check if CUDA kernels are available
+  std::string dof_type = get_dof_type_name(dof);
+  
+  if (!CudaKernelRegistry::has_kernels(dof_type, geom.type)) {
+    std::cerr << "Error: No CUDA kernels registered for DoF type '" << dof_type 
+              << "' with geometry type " << (int)geom.type << std::endl;
     return Eigen::VectorXcd::Zero(dof->num_dofs());
   }
   
-  auto affine_dof = std::dynamic_pointer_cast<AffineDoF>(dof);
-  if (!affine_dof) {
-    std::cerr << "Error: Only AffineDoF is currently supported" << std::endl;
+  // Get registered kernel function
+  auto kernels = CudaKernelRegistry::get_kernels(dof_type, geom.type);
+  
+  if (!kernels.second) {
+    std::cerr << "Error: Failed to retrieve CUDA gradient kernel function from registry" << std::endl;
     return Eigen::VectorXcd::Zero(dof->num_dofs());
   }
   
-  if (dofs.size() != 12) {
-    std::cerr << "Error: AffineDoF requires 12 DoFs" << std::endl;
-    return Eigen::VectorXcd::Zero(12);
-  }
-  
-  int NF = (int)geom.tris.size();
-  if (NF == 0) return Eigen::VectorXcd::Zero(12);
+  int num_dofs = (int)dof->num_dofs();
   
   // Prepare k-vector
   double kmag = k.norm();
-  if (kmag < 1e-10) return Eigen::VectorXcd::Zero(12);
+  if (kmag < 1e-10) return Eigen::VectorXcd::Zero(num_dofs);
   
-  Eigen::Vector3d khat = k / kmag;
-  double3 kdir = make_double3(khat.x(), khat.y(), khat.z());
-  double kmag_d = kmag;
+  // Create a single-point KGrid
+  KGrid single_kgrid;
+  single_kgrid.dirs.push_back({k.x() / kmag, k.y() / kmag, k.z() / kmag});
+  single_kgrid.kmag.push_back(kmag);
+  single_kgrid.w.push_back(1.0);
   
-  // Declare all variables at the top (before any goto cleanup)
-  TriPacked* d_tris = nullptr;
-  double* d_dofs = nullptr;
+  // Allocate output buffer
   double2* d_grad_A = nullptr;
-  double3* d_kdirs = nullptr;
-  double* d_kmags = nullptr;
-  std::vector<double> h_dofs(12);
-  dim3 grid(1);
-  dim3 block(blockSize);
-  std::vector<double2> h_grad_A(12);
-  Eigen::VectorXcd grad(12);
+  std::vector<double2> h_grad_A(num_dofs);
+  Eigen::VectorXcd grad(num_dofs);
   
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
@@ -535,42 +445,22 @@ Eigen::VectorXcd compute_Ak_gradient_cuda(
     } \
   } while(0)
   
-  CUDA_CHECK(cudaMalloc(&d_tris, NF * sizeof(TriPacked)));
-  CUDA_CHECK(cudaMalloc(&d_dofs, 12 * sizeof(double)));
-  CUDA_CHECK(cudaMalloc(&d_grad_A, 12 * sizeof(double2)));
-  CUDA_CHECK(cudaMalloc(&d_kdirs, sizeof(double3)));
-  CUDA_CHECK(cudaMalloc(&d_kmags, sizeof(double)));
+  CUDA_CHECK(cudaMalloc(&d_grad_A, num_dofs * sizeof(double2)));
   
-  // Copy data to device
-  CUDA_CHECK(cudaMemcpy(d_tris, geom.tris.data(), NF * sizeof(TriPacked), cudaMemcpyHostToDevice));
-  
-  for (int i = 0; i < 12; ++i) {
-    h_dofs[i] = dofs(i);
-  }
-  CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_kdirs, &kdir, sizeof(double3), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_kmags, &kmag_d, sizeof(double), cudaMemcpyHostToDevice));
-  
-  // Launch kernel (single k-point, so Q=1)
-  compute_A_gradient_affine_triangle_kernel<<<grid, block>>>(
-    d_tris, NF, d_kdirs, d_kmags, d_dofs, 1, d_grad_A
-  );
+  // Call registered kernel wrapper
+  kernels.second(geom, single_kgrid, dofs, d_grad_A, blockSize);
   CUDA_CHECK(cudaDeviceSynchronize());
   
   // Copy result back
-  CUDA_CHECK(cudaMemcpy(h_grad_A.data(), d_grad_A, 12 * sizeof(double2), cudaMemcpyDeviceToHost));
+  CUDA_CHECK(cudaMemcpy(h_grad_A.data(), d_grad_A, num_dofs * sizeof(double2), cudaMemcpyDeviceToHost));
   
   cleanup:
-  if (d_tris) cudaFree(d_tris);
-  if (d_dofs) cudaFree(d_dofs);
   if (d_grad_A) cudaFree(d_grad_A);
-  if (d_kdirs) cudaFree(d_kdirs);
-  if (d_kmags) cudaFree(d_kmags);
   
   #undef CUDA_CHECK
   
   // Convert result to Eigen::VectorXcd
-  for (int i = 0; i < 12; ++i) {
+  for (int i = 0; i < num_dofs; ++i) {
     grad(i) = std::complex<double>(h_grad_A[i].x, h_grad_A[i].y);
   }
   

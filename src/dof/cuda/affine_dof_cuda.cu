@@ -449,4 +449,17 @@ void register_affine_dof_cuda_kernels() {
   );
 }
 
+// Static initializer to automatically register kernels when the library loads
+// This ensures kernels are registered before any code tries to use them
+namespace {
+  struct AffineDoFKernelAutoRegistrar {
+    AffineDoFKernelAutoRegistrar() {
+      register_affine_dof_cuda_kernels();
+    }
+  };
+  
+  // Global static instance ensures constructor runs at library load time
+  static AffineDoFKernelAutoRegistrar g_affine_dof_auto_registrar;
+}
+
 } // namespace PoIntInt
