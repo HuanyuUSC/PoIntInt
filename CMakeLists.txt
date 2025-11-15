@@ -31,6 +31,65 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # ---- CUDA Toolkit ----
 find_package(CUDAToolkit REQUIRED)
 
+# ---- TBB (Intel Threading Building Blocks) ----
+find_package(TBB REQUIRED)
+
+# Function to copy TBB DLLs to target's output directory
+function(copy_tbb_dlls target)
+  if(WIN32 AND TBB_FOUND)
+    # Try to get TBB library location
+    get_target_property(TBB_LIBRARY_LOCATION TBB::tbb IMPORTED_LOCATION)
+    if(NOT TBB_LIBRARY_LOCATION)
+      get_target_property(TBB_LIBRARY_LOCATION TBB::tbb IMPORTED_LOCATION_RELEASE)
+    endif()
+    if(NOT TBB_LIBRARY_LOCATION)
+      get_target_property(TBB_LIBRARY_LOCATION TBB::tbb IMPORTED_LOCATION_DEBUG)
+    endif()
+    
+    if(TBB_LIBRARY_LOCATION)
+      get_filename_component(TBB_LIBRARY_DIR "${TBB_LIBRARY_LOCATION}" DIRECTORY)
+      
+      # TBB DLLs are typically in a 'bin' or 'redist' directory at the same level as 'lib'
+      # Try common locations
+      get_filename_component(TBB_ROOT "${TBB_LIBRARY_DIR}" DIRECTORY)
+      set(TBB_BIN_DIRS
+        "${TBB_ROOT}/bin"
+        "${TBB_ROOT}/redist"
+        "${TBB_ROOT}/bin/intel64/vc14"
+        "${TBB_ROOT}/bin/intel64/vc_mt"
+        "${TBB_LIBRARY_DIR}"
+        "${TBB_ROOT}/redist/intel64/vc14"
+        "${TBB_ROOT}/redist/intel64/vc_mt"
+      )
+      
+      # Determine build type suffix
+      set(TBB_DLL_PATTERNS)
+      if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_CONFIGURATION_TYPES)
+        list(APPEND TBB_DLL_PATTERNS "tbb*_debug.dll" "tbb*d.dll" "tbb12_debug.dll" "tbbmalloc*_debug.dll" "tbbmalloc*d.dll")
+      else()
+        list(APPEND TBB_DLL_PATTERNS "tbb*.dll" "tbb12.dll" "tbbmalloc*.dll")
+      endif()
+      
+      # Find and copy DLLs from all possible locations
+      foreach(bin_dir ${TBB_BIN_DIRS})
+        if(EXISTS "${bin_dir}")
+          foreach(pattern ${TBB_DLL_PATTERNS})
+            file(GLOB TBB_DLLS "${bin_dir}/${pattern}")
+            foreach(dll ${TBB_DLLS})
+              add_custom_command(TARGET ${target} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${dll}"
+                $<TARGET_FILE_DIR:${target}>
+                COMMENT "Copying TBB DLL: ${dll}"
+              )
+            endforeach()
+          endforeach()
+        endif()
+      endforeach()
+    endif()
+  endif()
+endfunction()
+
 # ---- Dependencies: Eigen, libigl ----
 include(FetchContent)
 
@@ -104,7 +163,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/include" PREFIX "include" FILES $
 # ---- Library target ----
 add_library(poIntInt_core ${POINTINT_SOURCES})
 target_include_directories(poIntInt_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_link_libraries(poIntInt_core PUBLIC Eigen3::Eigen igl::core)
+target_link_libraries(poIntInt_core PUBLIC Eigen3::Eigen igl::core TBB::tbb)
 set_target_properties(poIntInt_core PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
   CUDA_RESOLVE_DEVICE_SYMBOLS ON
@@ -143,6 +202,7 @@ if(BUILD_EXE)
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "app"
     )
+    copy_tbb_dlls(poIntInt_app)
   endif()
 endif()
 
@@ -158,6 +218,7 @@ if(BUILD_TESTS)
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "test"
     )
+    copy_tbb_dlls(poIntInt_test_triangle_mesh)
   endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sphere_pointcloud.cpp")
     add_executable(poIntInt_test_point_cloud test/test_sphere_pointcloud.cpp)
@@ -168,6 +229,7 @@ if(BUILD_TESTS)
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "test"
     )
+    copy_tbb_dlls(poIntInt_test_point_cloud)
   endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_gaussian_splats.cpp")
     add_executable(poIntInt_test_gaussian_splat test/test_gaussian_splats.cpp)
@@ -178,6 +240,7 @@ if(BUILD_TESTS)
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "test"
     )
+    copy_tbb_dlls(poIntInt_test_gaussian_splat)
   endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_multi_object.cpp")
     add_executable(poIntInt_test_multi_object test/test_multi_object.cpp)
@@ -188,6 +251,7 @@ if(BUILD_TESTS)
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "test"
     )
+    copy_tbb_dlls(poIntInt_test_multi_object)
   endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_dof_parameterization.cpp")
     add_executable(poIntInt_test_differentiability test/test_dof_parameterization.cpp)
@@ -198,6 +262,7 @@ if(BUILD_TESTS)
       CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
       FOLDER "test"
     )
+    copy_tbb_dlls(poIntInt_test_differentiability)
   endif()
 endif()
 
