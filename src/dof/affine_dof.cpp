@@ -170,8 +170,26 @@ std::complex<double> AffineDoF::compute_A(
     }
   }
   else if (geom.type == GEOM_GAUSSIAN) {
-    // For Gaussian splats, use standard implementation
-    Ak = DoFParameterization::compute_A(geom, k, dofs);
+    // For each Gaussian surfel, compute A(k) contribution
+    for (const auto& gauss : geom.gaussians) {
+      Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
+      Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
+
+      // Transformed quantities
+      Eigen::Vector3d c_prime = A * c + t;
+      Eigen::Vector3d k_prime = A.transpose() * k;
+
+      double kdotn = k_prime.dot(n);
+      double r2 = k_prime.squaredNorm() - kdotn * kdotn;
+
+      double exp_arg = -0.5 * gauss.sigma * gauss.sigma * r2;
+      double S_magnitude = gauss.w * std::exp(exp_arg);
+      double A_parallel_mag = S_magnitude * kdotn / kmag;
+
+      std::complex<double> phase = std::exp(k.dot(c_prime) * I);
+
+      Ak += phase * A_parallel_mag;
+    }
   }
 
   return Ak;
@@ -228,7 +246,6 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
     }
   } else if (geom.type == GEOM_DISK) {
     // For each disk, compute gradient contribution
-    std::complex<double> Ak(0.0, 0.0);
     for (const auto& disk : geom.disks) {
       Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
       Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
@@ -246,14 +263,13 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
       double A_parallel_mag = S_magnitude * kdotn / kmag;
 
       std::complex<double> phase = std::exp(k.dot(c_prime) * I);
-      std::complex<double> A_tri = phase * A_parallel_mag;
-      Ak += A_tri;
+      std::complex<double> A_disk = phase * A_parallel_mag;
 
       // Gradient w.r.t. translation t (DoFs 0-2)
       // dA/dt = i*k * A (since phase = exp(i*k·(A*c+t)), and t only affects phase)
-      grad.head(3) += I * A_tri * k;      
+      grad.head(3) += I * A_disk * k;
 
-      Eigen::Matrix3cd gA = A_tri * I * k * c.transpose();
+      Eigen::Matrix3cd gA = A_disk * I * k * c.transpose();
       gA += khat * n.transpose() * phase * S_magnitude;
       double dS_magnitude = (rho_r < 1e-10) ? -0.25 * disk.rho : 2.0 * Disk_J1_over_x_prime(rho_r) / r;
       dS_magnitude *= disk.rho * disk.area;
@@ -261,21 +277,35 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
       Eigen::Map<Eigen::Matrix3cd>(grad.data() + 3) += gA.transpose();
     }
   } else if (geom.type == GEOM_GAUSSIAN) {
-    // For Gaussian splats, use finite differencing
-    double eps = 1e-6;
-    for (int i = 0; i < 12; ++i) {
-      Eigen::VectorXd dofs_plus = dofs;
-      dofs_plus(i) += eps;
-      Geometry geom_plus = apply(geom, dofs_plus);
-      std::complex<double> A_plus = compute_A_geometry(geom_plus, k);
-      
-      Eigen::VectorXd dofs_minus = dofs;
-      dofs_minus(i) -= eps;
-      Geometry geom_minus = apply(geom, dofs_minus);
-      std::complex<double> A_minus = compute_A_geometry(geom_minus, k);
-      
-      grad(i) = (A_plus - A_minus) / (2.0 * eps);
-    }
+    // For each Gaussian surfel, compute A(k) contribution
+    for (const auto& gauss : geom.gaussians) {
+      Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
+      Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
+
+      // Transformed quantities
+      Eigen::Vector3d c_prime = A * c + t;
+      Eigen::Vector3d k_prime = A.transpose() * k;
+
+      double kdotn = k_prime.dot(n);
+      double r2 = k_prime.squaredNorm() - kdotn * kdotn;
+
+      double exp_arg = -0.5 * gauss.sigma * gauss.sigma * r2;
+      double S_magnitude = gauss.w * std::exp(exp_arg);
+      double A_parallel_mag = S_magnitude * kdotn / kmag;
+
+      std::complex<double> phase = std::exp(k.dot(c_prime) * I);
+      std::complex<double> A_gauss = phase * A_parallel_mag;
+
+      // Gradient w.r.t. translation t (DoFs 0-2)
+      // dA/dt = i*k * A (since phase = exp(i*k·(A*c+t)), and t only affects phase)
+      grad.head(3) += I * A_gauss * k;
+
+      Eigen::Matrix3cd gA = A_gauss * I * k * c.transpose();
+      gA += khat * n.transpose() * phase * S_magnitude;
+      double dS_magnitude = -gauss.sigma * gauss.sigma * S_magnitude;
+      gA += phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n).transpose();
+      Eigen::Map<Eigen::Matrix3cd>(grad.data() + 3) += gA.transpose();
+    }  
   }
   
   return grad;
