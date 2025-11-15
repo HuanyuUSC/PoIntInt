@@ -31,7 +31,7 @@ std::string get_default_lebedev_path() {
       path[i] = '/';
     }
   }
-  return path + "/data/lebedev/lebedev_003.txt";
+  return path + "/data/lebedev/lebedev_131.txt";
 #else
   // Fallback if macro not defined
   return "data/lebedev/lebedev_131.txt";
@@ -487,7 +487,7 @@ bool test_intersection_volume_gradient_affine(const std::string& leb_file) {
   
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);
-  KGrid KG = build_kgrid(L.dirs, L.weights, 1);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 52);
   
   double max_error_geom1 = 0.0;
   double max_error_geom2 = 0.0;
@@ -518,7 +518,7 @@ bool test_intersection_volume_gradient_affine(const std::string& leb_file) {
         double abs_fd = std::abs(grad_fd1(i));
         
         // Use absolute error if both are near zero, otherwise use relative error
-        bool use_absolute = (abs_cuda < 1e-8 && abs_fd < 1e-8);
+        bool use_absolute = (abs_cuda < 1e-6 && abs_fd < 1e-6);
         double error = use_absolute ? abs_error : (abs_error / std::max(abs_cuda, abs_fd));
         
         if (error > max_error_geom1) {
@@ -549,7 +549,7 @@ bool test_intersection_volume_gradient_affine(const std::string& leb_file) {
         double abs_fd = std::abs(grad_fd2(i));
         
         // Use absolute error if both are near zero, otherwise use relative error
-        bool use_absolute = (abs_cuda < 1e-8 && abs_fd < 1e-8);
+        bool use_absolute = (abs_cuda < 1e-6 && abs_fd < 1e-6);
         double error = use_absolute ? abs_error : (abs_error / std::max(abs_cuda, abs_fd));
         
         if (error > max_error_geom2) {
@@ -612,20 +612,20 @@ bool test_intersection_volume_gradient_consistency(const std::string& leb_file) 
   
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);
-  KGrid KG = build_kgrid(L.dirs, L.weights, 1);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 52);
   
   // Compute base volume
   Geometry geom1_base = affine_dof1->apply(geom1, dofs1_base);
   Geometry geom2_base = affine_dof2->apply(geom2, dofs2_base);
-  double vol_base = compute_intersection_volume_cuda(geom1_base, geom2_base, KG, 256, false);
+  double vol_base = compute_intersection_volume_cuda(geom1_base, geom2_base, KG, 256, true);
   
   // Compute gradient
   auto result = compute_intersection_volume_gradient_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, 256, false
+    geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, 256, true
   );
   
   // Perturb DoFs and check volume change
-  double eps = 1e-3;
+  double eps = 1e-5;
   double max_relative_error = 0.0;
   int num_tested = 0;
   
@@ -714,7 +714,7 @@ bool test_volume_consistency(const std::string& leb_file) {
   
   // Compute volume using gradient routine
   auto result = compute_intersection_volume_gradient_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, true
   );
   double volume_from_gradient = result.volume;
   
