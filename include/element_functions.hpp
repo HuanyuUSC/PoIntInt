@@ -32,5 +32,8 @@ std::pair<std::complex<double>, std::complex<double>>
 // Compute J1(z)/z
 double Disk_J1_over_x(double z);
 
+// Compute d/dz (J1(z)/z)
+double Disk_J1_over_x_prime(double z);
+
 } // namespace PoIntInt
 

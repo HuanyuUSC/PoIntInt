@@ -100,32 +100,23 @@ Triangle_Phi_ab_gradient(double alpha, double beta) {
 double Disk_J1_over_x(double x)
 {
   double ax = std::abs(x);
-  if (ax < 1e-3) {
+  if (ax < 1e-5) {
+    // From series: J1(x)/x ≈ 1/2 - x^2/16 + x^4/384
     double x2 = x * x;
     return 0.5 - x2 / 16.0 + x2 * x2 / 384.0;
   }
-  if (ax <= 12.0) {
-    double q = 0.25 * x * x;
-    double term = 0.5;
-    double sum = term;
-    for (int m = 0; m < 20; ++m) {
-      double denom = (double)(m + 1) * (double)(m + 2);
-      term *= -q / denom;
-      sum += term;
-      if (std::abs(term) < 1e-7 * std::abs(sum)) break;
-    }
-    return sum;
+  return std::cyl_bessel_j(1, x) / x;
+}
+
+double Disk_J1_over_x_prime(double x)
+{
+  const double ax = std::abs(x);
+  if (ax < 1e-5) {
+    // From series: (J1(x)/x)' ≈ -x/8 + x^3/96
+    return -x / 8.0 + (x * x * x) / 96.0;
   }
-  // Large x: Hankel asymptotics
-  double invx = 1.0 / ax;
-  double invx2 = invx * invx;
-  double invx3 = invx2 * invx;
-  double chi = ax - 0.75 * M_PI;
-  double amp = std::sqrt(2.0 / (M_PI * ax));
-  double cosp = (1.0 - 15.0 / 128.0 * invx2) * std::cos(chi);
-  double sinp = (3.0 / 8.0 * invx - 315.0 / 3072.0 * invx3) * std::sin(chi);
-  double J1 = amp * (cosp - sinp);
-  return J1 * invx;
+  // -J2 / x
+  return -std::cyl_bessel_j(2, x) / x;
 }
 
 } // namespace PoIntInt

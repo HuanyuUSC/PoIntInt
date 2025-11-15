@@ -34,8 +34,14 @@ struct AffineDoF : public DoFParameterization {
 private:
   // Helper: Build affine transformation matrix from DoFs
   // Returns (A, t) where A is 3x3 matrix and t is translation
-  std::pair<Eigen::Matrix3d, Eigen::Vector3d> 
-    build_affine_transform(const Eigen::VectorXd& dofs) const;
+  static std::pair<Eigen::Matrix3d, Eigen::Vector3d> 
+    build_affine_transform(const Eigen::VectorXd& dofs);
+
+  // Helper: Compute cofactor matrix of 3x3 matrix A
+  static Eigen::Matrix3d cofactor_matrix(const Eigen::Matrix3d& A);
+
+  // Helper: Compute cross product matrix for vector v
+  static Eigen::Matrix3d cross_product_matrix(const Eigen::Vector3d& v);
 };
 
 } // namespace PoIntInt

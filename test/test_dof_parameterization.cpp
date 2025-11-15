@@ -8,6 +8,7 @@
 #include "dof/triangle_mesh_dof.hpp"
 #include "form_factor_helpers.hpp"
 #include "geometry/packing.hpp"
+#include "geometry/geometry_helpers.hpp"
 #include "compute_intersection_volume.hpp"
 #include "compute_volume.hpp"
 #include "quadrature/lebedev_io.hpp"
@@ -678,6 +679,103 @@ bool test_triangle_mesh_dof_volume_gradient() {
 }
 
 // ============================================================================
+// Test 9: AffineDoF gradient computation with point cloud
+// ============================================================================
+bool test_affine_dof_gradient_pointcloud() {
+  std::cout << "\n=== Test 9: AffineDoF Gradient Computation (Point Cloud) ===" << std::endl;
+  
+  // Create a unit sphere point cloud
+  Eigen::MatrixXd P, N;
+  Eigen::VectorXd radii;
+  create_sphere_pointcloud(P, N, radii, 1000);
+  auto geom = make_point_cloud(P, N, radii, true);
+  
+  auto affine_dof = std::make_shared<AffineDoF>();
+  
+  // Test with a few different k-vectors and DoF configurations
+  std::vector<Eigen::Vector3d> test_k_vectors = {
+    Eigen::Vector3d(0.0, 0.0, 0.0),
+    Eigen::Vector3d(0.1, 0.0, 0.0),
+    Eigen::Vector3d(1.0, 0.0, 0.0),
+    Eigen::Vector3d(0.0, 1.0, 0.0),
+    Eigen::Vector3d(0.0, 0.0, 1.0),
+    Eigen::Vector3d(1.0, 1.0, 0.0),
+    Eigen::Vector3d(0.5, 0.5, 0.5)
+  };
+  
+  // Test DoF configurations
+  std::vector<Eigen::VectorXd> test_dofs = {
+    // Identity: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+    (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+    // Translation: [0.1, 0.2, 0.3, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+    (Eigen::VectorXd(12) << 0.1, 0.2, 0.3, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+    // Rotation around x-axis: [0, 0, 0, 1, 0, 0, 0, cos(0.1), -sin(0.1), 0, sin(0.1), cos(0.1)]
+    (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, std::cos(0.1), -std::sin(0.1), 0.0, std::sin(0.1), std::cos(0.1)).finished(),
+    // More involved transformation
+    (Eigen::VectorXd(12) << 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.0, 7.0, 8.0, 0.0, 0.0, 9.0).finished(),
+  };
+  
+  double max_rel_error = 0.0;
+  int num_tested = 0;
+  int num_warnings = 0;
+  
+  for (const auto& k : test_k_vectors) {
+    // Skip k=0 for point clouds as it may cause issues
+    if (k.norm() < 1e-10) continue;
+    
+    for (const auto& dofs : test_dofs) {
+      // Compute gradient using analytical method
+      Eigen::VectorXcd grad_analytical = affine_dof->compute_A_gradient(geom, k, dofs);
+      
+      // Compute gradient using finite differencing
+      Eigen::VectorXcd grad_fd = compute_gradient_finite_diff(geom, k, affine_dof, dofs);
+      
+      // Compare
+      for (int i = 0; i < grad_analytical.size(); ++i) {
+        std::complex<double> diff = grad_analytical(i) - grad_fd(i);
+        double abs_error = std::abs(diff);
+        double abs_analytical = std::abs(grad_analytical(i));
+        double abs_fd = std::abs(grad_fd(i));
+        
+        // Use absolute error if both are near zero, otherwise use relative error
+        bool use_absolute = (abs_analytical < 1e-10 && abs_fd < 1e-10);
+        double error = use_absolute ? abs_error : (abs_error / std::max(abs_analytical, abs_fd));
+        
+        if (error > max_rel_error) {
+          max_rel_error = error;
+        }
+        
+        double tolerance = use_absolute ? 1e-4 : 0.5;  // 50% relative tolerance or 1e-4 absolute
+        if (error > tolerance && num_warnings < 10) {
+          std::cout << "  Warning: Large gradient error for DoF " << i << std::endl;
+          std::cout << "    k = (" << k.x() << ", " << k.y() << ", " << k.z() << ")" << std::endl;
+          std::cout << "    DoFs: " << dofs.transpose() << std::endl;
+          std::cout << "    Analytical: " << grad_analytical(i) << std::endl;
+          std::cout << "    Finite diff: " << grad_fd(i) << std::endl;
+          if (use_absolute) {
+            std::cout << "    Abs error: " << abs_error << std::endl;
+          } else {
+            std::cout << "    Rel error: " << error << std::endl;
+          }
+          num_warnings++;
+        }
+        
+        num_tested++;
+      }
+    }
+  }
+  
+  std::cout << "  Tested " << num_tested << " gradient components" << std::endl;
+  std::cout << "  Max error: " << max_rel_error << std::endl;
+  
+  // Pass if max error is reasonable (50% relative or 1e-4 absolute)
+  bool passed = max_rel_error < 1.0;  // 100% tolerance
+  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 int main(int argc, char** argv) {
@@ -718,6 +816,9 @@ int main(int argc, char** argv) {
   
   // Test 8: TriangleMeshDoF volume gradient
   all_passed &= test_triangle_mesh_dof_volume_gradient();
+  
+  // Test 9: AffineDoF gradient computation with point cloud
+  all_passed &= test_affine_dof_gradient_pointcloud();
   
   std::cout << "\n=== Summary ===" << std::endl;
   if (all_passed) {

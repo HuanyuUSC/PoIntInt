@@ -7,8 +7,11 @@
 
 namespace PoIntInt {
 
+// the imaginary unit
+static const std::complex<double> I(0.0, 1.0);
+
 std::pair<Eigen::Matrix3d, Eigen::Vector3d> AffineDoF::build_affine_transform(
-  const Eigen::VectorXd& dofs) const
+  const Eigen::VectorXd& dofs)
 {
   assert(dofs.size() == 12);
   
@@ -19,6 +22,30 @@ std::pair<Eigen::Matrix3d, Eigen::Vector3d> AffineDoF::build_affine_transform(
   Eigen::Matrix3d A = Eigen::Map<const Eigen::Matrix3d>(dofs.data() + 3).transpose();
   
   return std::make_pair(A, t);
+}
+
+Eigen::Matrix3d AffineDoF::cofactor_matrix(const Eigen::Matrix3d& A)
+{
+  Eigen::Matrix3d cofactor_A;
+  cofactor_A(0, 0) = A(1, 1) * A(2, 2) - A(1, 2) * A(2, 1);
+  cofactor_A(0, 1) = A(1, 2) * A(2, 0) - A(1, 0) * A(2, 2);
+  cofactor_A(0, 2) = A(1, 0) * A(2, 1) - A(1, 1) * A(2, 0);
+  cofactor_A(1, 0) = A(2, 1) * A(0, 2) - A(2, 2) * A(0, 1);
+  cofactor_A(1, 1) = A(2, 2) * A(0, 0) - A(2, 0) * A(0, 2);
+  cofactor_A(1, 2) = A(2, 0) * A(0, 1) - A(2, 1) * A(0, 0);
+  cofactor_A(2, 0) = A(0, 1) * A(1, 2) - A(0, 2) * A(1, 1);
+  cofactor_A(2, 1) = A(0, 2) * A(1, 0) - A(0, 0) * A(1, 2);
+  cofactor_A(2, 2) = A(0, 0) * A(1, 1) - A(0, 1) * A(1, 0);
+
+  return cofactor_A;
+}
+
+Eigen::Matrix3d AffineDoF::cross_product_matrix(const Eigen::Vector3d& v) {
+  Eigen::Matrix3d cp;
+  cp << 0, -v.z(), v.y(),
+    v.z(), 0, -v.x(),
+    -v.y(), v.x(), 0;
+  return cp;
 }
 
 Geometry AffineDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) const {
@@ -96,7 +123,7 @@ std::complex<double> AffineDoF::compute_A(
   const Eigen::Vector3d khat = k / kmag;
 
   if (geom.type == GEOM_TRIANGLE) {
-    // For each triangle, compute gradient contribution
+    // For each triangle, compute A(k) contribution
     for (const auto& tri : geom.tris) {
       Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
       Eigen::Vector3d e1(tri.e1.x, tri.e1.y, tri.e1.z);
@@ -109,9 +136,6 @@ std::complex<double> AffineDoF::compute_A(
       Eigen::Vector3d e2_prime = A * e2;
       Eigen::Vector3d S_prime = 0.5 * e1_prime.cross(e2_prime);
 
-      // the imaginary unit
-      static const std::complex<double> I(0.0, 1.0);
-
       // Compute A(k) for transformed triangle
       double alpha_prime = k.dot(e1_prime);
       double beta_prime = k.dot(e2_prime);
@@ -123,8 +147,27 @@ std::complex<double> AffineDoF::compute_A(
     }
   }
   else if (geom.type == GEOM_DISK) {
-    // For disks, use standard implementation
-    Ak = DoFParameterization::compute_A(geom, k, dofs);
+    // For each disk, compute A(k) contribution
+    for (const auto& disk : geom.disks) {
+      Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
+      Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
+
+      // Transformed quantities
+      Eigen::Vector3d c_prime = A * c + t;
+      Eigen::Vector3d k_prime = A.transpose() * k;
+
+      double kdotn = k_prime.dot(n);
+      double r2 = std::max(0.0, k_prime.squaredNorm() - kdotn * kdotn);
+      double r = std::sqrt(r2);
+
+      double rho_r = disk.rho * r;
+      double S_magnitude = (rho_r < 1e-10) ? disk.area : 2.0 * disk.area * Disk_J1_over_x(rho_r);
+      double A_parallel_mag = S_magnitude * kdotn / kmag;
+
+      std::complex<double> phase = std::exp(k.dot(c_prime) * I);
+
+      Ak += phase * A_parallel_mag;
+    }
   }
   else if (geom.type == GEOM_GAUSSIAN) {
     // For Gaussian splats, use standard implementation
@@ -161,9 +204,6 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
       Eigen::Vector3d e1_prime = A * e1;
       Eigen::Vector3d e2_prime = A * e2;
       Eigen::Vector3d S_prime = 0.5 * e1_prime.cross(e2_prime);
-
-      // the imaginary unit
-      static const std::complex<double> I(0.0, 1.0);
       
       // Compute A(k) for transformed triangle
       double alpha_prime = k.dot(e1_prime);
@@ -182,34 +222,43 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
       grad.head(3) += I * A_tri * k;
 
       Eigen::Matrix3cd gA = A_tri * I * k * a.transpose();
-      gA += gamma_prime * phase_prime * k * (dPhi_dalpha * e1 + dPhi_dbeta * e2).transpose();
-
-      auto cross_product_matrix = [](const Eigen::Vector3d& v) {
-        Eigen::Matrix3d cp;
-        cp << 0, -v.z(), v.y(),
-          v.z(), 0, -v.x(),
-          -v.y(), v.x(), 0;
-        return cp;
-        };
-      
+      gA += gamma_prime * phase_prime * k * (dPhi_dalpha * e1 + dPhi_dbeta * e2).transpose();      
       gA -= cross_product_matrix(khat) * A * cross_product_matrix(S) * phase_prime * phi_prime;
       Eigen::Map<Eigen::Matrix3cd>(grad.data() + 3) += gA.transpose();
     }
   } else if (geom.type == GEOM_DISK) {
-    // For disks, use finite differencing (analytical formula is more complex)
-    double eps = 1e-6;
-    for (int i = 0; i < 12; ++i) {
-      Eigen::VectorXd dofs_plus = dofs;
-      dofs_plus(i) += eps;
-      Geometry geom_plus = apply(geom, dofs_plus);
-      std::complex<double> A_plus = compute_A_geometry(geom_plus, k);
-      
-      Eigen::VectorXd dofs_minus = dofs;
-      dofs_minus(i) -= eps;
-      Geometry geom_minus = apply(geom, dofs_minus);
-      std::complex<double> A_minus = compute_A_geometry(geom_minus, k);
-      
-      grad(i) = (A_plus - A_minus) / (2.0 * eps);
+    // For each disk, compute gradient contribution
+    std::complex<double> Ak(0.0, 0.0);
+    for (const auto& disk : geom.disks) {
+      Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
+      Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
+
+      // Transformed quantities
+      Eigen::Vector3d c_prime = A * c + t;
+      Eigen::Vector3d k_prime = A.transpose() * k;
+
+      double kdotn = k_prime.dot(n);
+      double r2 = std::max(0.0, k_prime.squaredNorm() - kdotn * kdotn);
+      double r = std::sqrt(r2);
+
+      double rho_r = disk.rho * r;
+      double S_magnitude = (rho_r < 1e-10) ? disk.area : 2.0 * disk.area * Disk_J1_over_x(rho_r);
+      double A_parallel_mag = S_magnitude * kdotn / kmag;
+
+      std::complex<double> phase = std::exp(k.dot(c_prime) * I);
+      std::complex<double> A_tri = phase * A_parallel_mag;
+      Ak += A_tri;
+
+      // Gradient w.r.t. translation t (DoFs 0-2)
+      // dA/dt = i*k * A (since phase = exp(i*k·(A*c+t)), and t only affects phase)
+      grad.head(3) += I * A_tri * k;      
+
+      Eigen::Matrix3cd gA = A_tri * I * k * c.transpose();
+      gA += khat * n.transpose() * phase * S_magnitude;
+      double dS_magnitude = (rho_r < 1e-10) ? -0.25 * disk.rho : 2.0 * Disk_J1_over_x_prime(rho_r) / r;
+      dS_magnitude *= disk.rho * disk.area;
+      gA += phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n).transpose();
+      Eigen::Map<Eigen::Matrix3cd>(grad.data() + 3) += gA.transpose();
     }
   } else if (geom.type == GEOM_GAUSSIAN) {
     // For Gaussian splats, use finite differencing
@@ -274,21 +323,12 @@ Eigen::VectorXd AffineDoF::compute_volume_gradient(
   // dV'/dA_ij = sign(det(A)) * cof(A) * V_base
   
   // Compute cofactor matrix
-  Eigen::Matrix3d cofactor_A;
-  cofactor_A(0, 0) = A(1, 1) * A(2, 2) - A(1, 2) * A(2, 1);
-  cofactor_A(0, 1) = A(1, 2) * A(2, 0) - A(1, 0) * A(2, 2);
-  cofactor_A(0, 2) = A(1, 0) * A(2, 1) - A(1, 1) * A(2, 0);
-  cofactor_A(1, 0) = A(2, 1) * A(0, 2) - A(2, 2) * A(0, 1);
-  cofactor_A(1, 1) = A(2, 2) * A(0, 0) - A(2, 0) * A(0, 2);
-  cofactor_A(1, 2) = A(2, 0) * A(0, 1) - A(2, 1) * A(0, 0);
-  cofactor_A(2, 0) = A(0, 1) * A(1, 2) - A(0, 2) * A(1, 1);
-  cofactor_A(2, 1) = A(0, 2) * A(1, 0) - A(0, 0) * A(1, 2);
-  cofactor_A(2, 2) = A(0, 0) * A(1, 1) - A(0, 1) * A(1, 0);
+  Eigen::Matrix3d cof_A = cofactor_matrix(A);
   
   for (int row = 0; row < 3; ++row) {
     for (int col = 0; col < 3; ++col) {
       int dof_idx = 3 + row * 3 + col;
-      grad(dof_idx) = sign_det_A * cofactor_A(row, col) * V_base;
+      grad(dof_idx) = sign_det_A * cof_A(row, col) * V_base;
     }
   }
   
