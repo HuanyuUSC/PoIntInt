@@ -372,6 +372,73 @@ bool test_volume_divergence_theorem(const std::string& leb_file, int Nrad = 96) 
 }
 
 // ============================================================================
+// Test 7: CPU vs GPU comparison (accuracy and speed)
+// ============================================================================
+bool test_cpu_vs_gpu_comparison(const std::string& leb_file, int Nrad = 96) {
+  std::cout << "\n=== Test 7: CPU vs GPU Comparison ===" << std::endl;
+  
+  // Clear any previous CUDA errors
+  cudaError_t err = cudaGetLastError();
+  if (err != cudaSuccess && err != cudaErrorNoDevice) {
+    cudaDeviceSynchronize();  // Clear error state
+  }
+  
+  // Create unit sphere Gaussian splats
+  Eigen::MatrixXd P, N;
+  Eigen::VectorXd sigmas, weights;
+  create_sphere_gaussians(P, N, sigmas, weights, 2000);  // More points for better accuracy
+  auto geom = make_gaussian_splat(P, N, sigmas, weights);
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
+  
+  // Compute using CPU version (with profiling)
+  std::cout << "\n--- CPU Version ---" << std::endl;
+  double volume_cpu = compute_intersection_volume_cpu(geom, geom, KG, true);
+  
+  // Compute using GPU version (with profiling)
+  std::cout << "\n--- GPU Version ---" << std::endl;
+  double volume_gpu = compute_intersection_volume_cuda(geom, geom, KG, 256, true);
+  
+  // Compare results
+  double volume_exact = 4.0 * M_PI / 3.0;  // Unit sphere volume
+  double abs_error_cpu = std::abs(volume_cpu - volume_exact);
+  double abs_error_gpu = std::abs(volume_gpu - volume_exact);
+  double rel_error_cpu = abs_error_cpu / volume_exact;
+  double rel_error_gpu = abs_error_gpu / volume_exact;
+  double cpu_gpu_diff = std::abs(volume_cpu - volume_gpu);
+  double cpu_gpu_rel_diff = cpu_gpu_diff / (0.5 * (std::abs(volume_cpu) + std::abs(volume_gpu)) + 1e-10);
+  
+  std::cout << "\n--- Comparison ---" << std::endl;
+  std::cout << std::fixed << std::setprecision(10);
+  std::cout << "  CPU volume:        " << volume_cpu << std::endl;
+  std::cout << "  GPU volume:        " << volume_gpu << std::endl;
+  std::cout << "  Exact volume:      " << volume_exact << std::endl;
+  std::cout << std::scientific << std::setprecision(6);
+  std::cout << "  CPU abs error:     " << abs_error_cpu << std::endl;
+  std::cout << "  GPU abs error:     " << abs_error_gpu << std::endl;
+  std::cout << "  CPU rel error:     " << rel_error_cpu 
+            << " (" << std::fixed << std::setprecision(4) << rel_error_cpu * 100.0 << "%)" << std::endl;
+  std::cout << "  GPU rel error:     " << rel_error_gpu 
+            << " (" << std::fixed << std::setprecision(4) << rel_error_gpu * 100.0 << "%)" << std::endl;
+  std::cout << "  CPU-GPU diff:      " << std::scientific << cpu_gpu_diff << std::endl;
+  std::cout << "  CPU-GPU rel diff:  " << cpu_gpu_rel_diff 
+            << " (" << std::fixed << std::setprecision(4) << cpu_gpu_rel_diff * 100.0 << "%)" << std::endl;
+  
+  // Both should be reasonably accurate (within 20% of exact for Gaussian splats)
+  bool accuracy_passed = (rel_error_cpu < 0.20) && (rel_error_gpu < 0.20);
+  // CPU and GPU should agree (within 5% relative difference)
+  bool consistency_passed = cpu_gpu_rel_diff < 0.05;
+  bool passed = accuracy_passed && consistency_passed;
+  
+  std::cout << "  Accuracy check:    " << (accuracy_passed ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Consistency check: " << (consistency_passed ? "PASS" : "FAIL") << std::endl;
+  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  return passed;
+}
+
+// ============================================================================
 // Main test runner
 // ============================================================================
 int main(int argc, char** argv) {
@@ -406,6 +473,9 @@ int main(int argc, char** argv) {
   
   // Test 6: Volume from divergence theorem
   all_passed &= test_volume_divergence_theorem(leb_file, Nrad);
+  
+  // Test 7: CPU vs GPU comparison
+  all_passed &= test_cpu_vs_gpu_comparison(leb_file, Nrad);
   
   std::cout << "\n=== Summary ===" << std::endl;
   if (all_passed) {

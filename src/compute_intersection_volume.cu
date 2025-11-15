@@ -8,9 +8,15 @@
 #include <iostream>
 #include <iomanip>
 #include <math_constants.h>
+#include <Eigen/Dense>
+#include <complex>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
+#include <functional>
 #include "compute_intersection_volume.hpp"
 #include "geometry/geometry.hpp"
 #include "geometry/types.hpp"
+#include "form_factor_helpers.hpp"
 
 // ===================== utilities =====================
 
@@ -536,6 +542,90 @@ double compute_intersection_volume_cuda(
     geom1.tris, geom1.disks, geom1.gaussians, geom1.type,
     geom2.tris, geom2.disks, geom2.gaussians, geom2.type,
     KG, blockSize, enable_profiling);
+}
+
+// CPU version of intersection volume computation
+double compute_intersection_volume_cpu(
+  const Geometry& geom1,
+  const Geometry& geom2,
+  const KGrid& KG,
+  bool enable_profiling)
+{
+  auto t_start = std::chrono::high_resolution_clock::now();
+  
+  #ifndef M_PI
+  #define M_PI 3.14159265358979323846
+  #endif
+  
+  int Q = (int)KG.kmag.size();
+  if (Q == 0) return 0.0;
+  
+  auto t_compute_start = std::chrono::high_resolution_clock::now();
+  
+  // Parallel reduction over k-points
+  // For each k-point: compute A1(k) and A2(k), then Re(A1 * conj(A2)) * weight
+  double I = tbb::parallel_reduce(
+    tbb::blocked_range<size_t>(0, Q),
+    0.0,
+    [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+      for (size_t q = r.begin(); q < r.end(); ++q) {
+        // Get k-vector: k = kmag[q] * kdir[q]
+        double kmag = (double)KG.kmag[q];
+        const auto& kdir_arr = KG.dirs[q];
+        Eigen::Vector3d kdir((double)kdir_arr[0], (double)kdir_arr[1], (double)kdir_arr[2]);
+        Eigen::Vector3d k = kmag * kdir;
+        
+        // Compute A1(k) and A2(k) for the two geometries
+        std::complex<double> A1 = compute_A_geometry(geom1, k);
+        std::complex<double> A2 = compute_A_geometry(geom2, k);
+        
+        // Compute Re(A1 * conj(A2)) = Re(A1) * Re(A2) + Im(A1) * Im(A2)
+        // A1 * conj(A2) = (a1 + i*b1) * (a2 - i*b2) = a1*a2 + b1*b2 + i*(b1*a2 - a1*b2)
+        // Real part: a1*a2 + b1*b2
+        double real_part = A1.real() * A2.real() + A1.imag() * A2.imag();
+        
+        // Accumulate: weight * Re(A1 * conj(A2))
+        local_sum += KG.w[q] * real_part;
+      }
+      return local_sum;
+    },
+    std::plus<double>());
+  
+  auto t_compute_end = std::chrono::high_resolution_clock::now();
+  
+  // Final result: V = I / (8π³)
+  double volume = I / (8.0 * M_PI * M_PI * M_PI);
+  
+  auto t_end = std::chrono::high_resolution_clock::now();
+  
+  if (enable_profiling) {
+    auto compute_time = std::chrono::duration_cast<std::chrono::microseconds>(t_compute_end - t_compute_start).count() / 1000.0;
+    auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count() / 1000.0;
+    
+    std::cout << std::fixed << std::setprecision(3);
+    std::cout << "\n=== CPU Volume Computation Profiler ===" << std::endl;
+    if (geom1.type == GEOM_TRIANGLE) {
+      std::cout << "Geometry 1: Triangle mesh (" << geom1.tris.size() << " faces)" << std::endl;
+    } else if (geom1.type == GEOM_DISK) {
+      std::cout << "Geometry 1: Point cloud (" << geom1.disks.size() << " disks)" << std::endl;
+    } else {
+      std::cout << "Geometry 1: Gaussian splats (" << geom1.gaussians.size() << " gaussians)" << std::endl;
+    }
+    if (geom2.type == GEOM_TRIANGLE) {
+      std::cout << "Geometry 2: Triangle mesh (" << geom2.tris.size() << " faces)" << std::endl;
+    } else if (geom2.type == GEOM_DISK) {
+      std::cout << "Geometry 2: Point cloud (" << geom2.disks.size() << " disks)" << std::endl;
+    } else {
+      std::cout << "Geometry 2: Gaussian splats (" << geom2.gaussians.size() << " gaussians)" << std::endl;
+    }
+    std::cout << "K-grid nodes: " << Q << std::endl;
+    std::cout << "--- Timing (ms) ---" << std::endl;
+    std::cout << "  Computation:      " << std::setw(8) << compute_time << " ms" << std::endl;
+    std::cout << "  Total time:       " << std::setw(8) << total_time << " ms" << std::endl;
+    std::cout << "==========================================\n" << std::endl;
+  }
+  
+  return volume;
 }
 
 } // namespace PoIntInt
