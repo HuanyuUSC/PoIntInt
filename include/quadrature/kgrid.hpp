@@ -7,8 +7,8 @@
 namespace PoIntInt {
 
 struct KGrid {
-  std::vector<std::array<float,3>> dirs; // unit dir
-  std::vector<float> kmag;               // k = tan t
+  std::vector<std::array<double,3>> dirs; // unit dir
+  std::vector<double> kmag;               // k = tan t
   std::vector<double> w;                 // full weight: (1/2π^2) * w_ang * w_rad * sec^2(t) (always double for accuracy)
 };
 
@@ -34,8 +34,8 @@ inline KGrid build_kgrid(
       double k    = std::tan(ti);
       for (size_t j=0; j<leb_dirs.size(); ++j){
         const auto& d = leb_dirs[j];
-        KG.dirs.push_back( { (float)d[0], (float)d[1], (float)d[2] } );
-        KG.kmag.push_back( (float)k );
+        KG.dirs.push_back( { d[0], d[1], d[2] } );
+        KG.kmag.push_back( k );
         // weight for this node: leb_w[j] * (wti * sec^2)
         // leb_w[j] integrates over solid angle (sums to 4π)
         // wti integrates over t in [0, π/2]

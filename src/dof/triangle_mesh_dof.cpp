@@ -31,10 +31,10 @@ Geometry TriangleMeshDoF::apply(const Geometry& geom, const Eigen::VectorXd& dof
         Eigen::Vector3d e1 = dofs.segment<3>(3 * F_(i, 1)) - a;
         Eigen::Vector3d e2 = dofs.segment<3>(3 * F_(i, 2)) - a;
         Eigen::Vector3d S = 0.5 * e1.cross(e2);
-        transformed.tris[i].a = make_float3((float)a.x(), (float)a.y(), (float)a.z());
-        transformed.tris[i].e1 = make_float3((float)e1.x(), (float)e1.y(), (float)e1.z());
-        transformed.tris[i].e2 = make_float3((float)e2.x(), (float)e2.y(), (float)e2.z());
-        transformed.tris[i].S = make_float3((float)S.x(), (float)S.y(), (float)S.z());
+        transformed.tris[i].a = make_double3(a.x(), a.y(), a.z());
+        transformed.tris[i].e1 = make_double3(e1.x(), e1.y(), e1.z());
+        transformed.tris[i].e2 = make_double3(e2.x(), e2.y(), e2.z());
+        transformed.tris[i].S = make_double3(S.x(), S.y(), S.z());
       }
     });
   

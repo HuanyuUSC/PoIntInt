@@ -20,124 +20,158 @@
 
 // ===================== utilities =====================
 
-__device__ __forceinline__ float2 cmul(float2 a, float2 b) {
-  return make_float2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x);
+__device__ __forceinline__ double2 cmul(double2 a, double2 b) {
+  return make_double2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x);
 }
 
-__device__ __forceinline__ float2 cexp_i(float phase) {
-  float s, c;
-  __sincosf(phase, &s, &c);
-  return make_float2(c, s);
+__device__ __forceinline__ double2 cexp_i(double phase) {
+  double s, c;
+  sincos(phase, &s, &c);
+  return make_double2(c, s);
 }
 
-// J1_over_x(x) := J1(x)/x  (accurate ~1e-6 in float across full range)
-__device__ __forceinline__ float J1_over_x(float x)
+// J1_over_x(x) := J1(x)/x  (accurate ~1e-6 in double across full range)
+__device__ __forceinline__ double J1_over_x(double x)
 {
-  float ax = fabsf(x);
+  double ax = fabs(x);
 
   // Tiny x: even Taylor up to x^8
-  if (ax < 1e-3f) {
-    float x2 = x * x;
-    float t = 0.5f;                      // 1/2
-    t += (-1.0f / 16.0f) * x2;              // - x^2/16
-    float x4 = x2 * x2;
-    t += (1.0f / 384.0f) * x4;              // + x^4/384
-    float x6 = x4 * x2;
-    t += (-1.0f / 18432.0f) * x6;           // - x^6/18432
+  if (ax < 1e-3) {
+    double x2 = x * x;
+    double t = 0.5;                      // 1/2
+    t += (-1.0 / 16.0) * x2;              // - x^2/16
+    double x4 = x2 * x2;
+    t += (1.0 / 384.0) * x4;              // + x^4/384
+    double x6 = x4 * x2;
+    t += (-1.0 / 18432.0) * x6;           // - x^6/18432
     return t;
   }
 
   // Small–moderate x: stable series with term recurrence
-  if (ax <= 12.0f) {
-    float q = 0.25f * x * x;            // x^2/4
-    float term = 0.5f;                    // m=0
-    float sum = term;
+  if (ax <= 12.0) {
+    double q = 0.25 * x * x;            // x^2/4
+    double term = 0.5;                    // m=0
+    double sum = term;
 #pragma unroll
     for (int m = 0; m < 20; ++m) {
-      float denom = (float)(m + 1) * (float)(m + 2);
+      double denom = (double)(m + 1) * (double)(m + 2);
       term *= -q / denom;              // term_{m+1}
       sum += term;
-      if (fabsf(term) < 1e-7f * fabsf(sum)) break;
+      if (fabs(term) < 1e-7 * fabs(sum)) break;
     }
     return sum;
   }
 
   // Large x: Hankel asymptotics (3 correction terms), then divide by x
-  float invx = 1.0f / ax;
-  float invx2 = invx * invx;
-  float invx3 = invx2 * invx;
+  double invx = 1.0 / ax;
+  double invx2 = invx * invx;
+  double invx3 = invx2 * invx;
 
-  float chi = ax - 0.75f * CUDART_PI;
-  float s, c;
-  __sincosf(chi, &s, &c);
+  double chi = ax - 0.75 * CUDART_PI;
+  double s, c;
+  sincos(chi, &s, &c);
 
-  float amp = sqrtf(2.0f / (CUDART_PI * ax));
-  float cosp = (1.0f - 15.0f / 128.0f * invx2) * c;
-  float sinp = (3.0f / 8.0f * invx - 315.0f / 3072.0f * invx3) * s;
-  float J1 = amp * (cosp - sinp);
+  double amp = sqrt(2.0 / (CUDART_PI * ax));
+  double cosp = (1.0 - 15.0 / 128.0 * invx2) * c;
+  double sinp = (3.0 / 8.0 * invx - 315.0 / 3072.0 * invx3) * s;
+  double J1 = amp * (cosp - sinp);
   return J1 * invx;                          // J1(x)/x
 }
 
 
 // E(z) = (sin z + i (1 - cos z)) / z, stable small-z
-__device__ __forceinline__ float2 E_func(float z){
-  float az = fabsf(z);
-  float threshold = 1e-4f;
+__device__ __forceinline__ double2 E_func(double z){
+  double az = fabs(z);
+  double threshold = 1e-4;
   if (az < threshold){
     // series: sin z / z ≈ 1 - z^2/6 + z^4/120
     //         (1 - cos z)/z ≈ z/2 - z^3/24 + z^5/720
-    float z2 = z*z, z4 = z2*z2;
-    float real = 1.0f - z2*(1.0f/6.0f) + z4*(1.0f/120.0f);
-    float imag = z*(0.5f) - z*z2*(1.0f/24.0f) + z4*z*(1.0f/720.0f);
-    return make_float2(real, imag);
+    double z2 = z*z, z4 = z2*z2;
+    double real = 1.0 - z2*(1.0/6.0) + z4*(1.0/120.0);
+    double imag = z*(0.5) - z*z2*(1.0/24.0) + z4*z*(1.0/720.0);
+    return make_double2(real, imag);
   } else {
-    float s,c; __sincosf(z, &s, &c);
-    return make_float2(s/z, (1.0f - c)/z);
+    double s,c; sincos(z, &s, &c);
+    return make_double2(s/z, (1.0 - c)/z);
   }
 }
 
 // E'(z) = d/dz E(z)  (stable)
-__device__ __forceinline__ float2 E_prime(float z){
-  float az = fabsf(z);
-  float threshold = 1e-4f;
+__device__ __forceinline__ double2 E_prime(double z){
+  double az = fabs(z);
+  double threshold = 1e-4;
   if (az < threshold){
     // from series:
     // Re ≈ -(1/3) z + (1/30) z^3
     // Im ≈  1/2  - (1/8) z^2 + (1/144) z^4
-    float z2 = z*z, z3 = z2*z, z4 = z2*z2;
-    float real = -(1.0f/3.0f)*z + (1.0f/30.0f)*z3;
-    float imag =  0.5f - (1.0f/8.0f)*z2 + (1.0f/144.0f)*z4;
-    return make_float2(real, imag);
+    double z2 = z*z, z3 = z2*z, z4 = z2*z2;
+    double real = -(1.0/3.0)*z + (1.0/30.0)*z3;
+    double imag =  0.5 - (1.0/8.0)*z2 + (1.0/144.0)*z4;
+    return make_double2(real, imag);
   } else {
-    float s,c; __sincosf(z, &s, &c);
+    double s,c; sincos(z, &s, &c);
     // Re: (z cos z - sin z)/z^2
     // Im: (z sin z - (1 - cos z))/z^2
-    float z2 = z*z;
-    float re = (z*c - s)/z2;
-    float im = (z*s - (1.0f - c))/z2;
-    return make_float2(re, im);
+    double z2 = z*z;
+    double re = (z*c - s)/z2;
+    double im = (z*s - (1.0 - c))/z2;
+    return make_double2(re, im);
   }
 }
 
-// Phi(α,β) = -2i [E(β) - E(α)]/(β-α)  , with α≈β -> -2i E'(α)
-__device__ __forceinline__ float2 Phi_ab(float alpha, float beta){
-  float d = beta - alpha;
-  float threshold = 1e-5f;
-  if (fabsf(d) < threshold){
-    float2 Ep = E_prime(0.5f*(alpha+beta));
-    // -2i * (Ep.re + i Ep.im) = -2i*Ep.re + 2*Ep.im
-    return make_float2(2.0f*Ep.y, -2.0f*Ep.x);
+// Double-precision element functions to match CPU implementation
+__device__ __forceinline__ double2 E_func_d(double z) {
+  double az = fabs(z);
+  double threshold = 1e-4;
+  if (az < threshold) {
+    double z2 = z*z, z4 = z2*z2;
+    double real = 1.0 - z2/6.0 + z4/120.0;
+    double imag = z*0.5 - z*z2/24.0 + z4*z/720.0;
+    return make_double2(real, imag);
   } else {
-    float2 Ea = E_func(alpha);
-    float2 Eb = E_func(beta);
-    // num = Eb - Ea
-    float2 num = make_float2(Eb.x - Ea.x, Eb.y - Ea.y);
-    // -2i * num/d
-    float invd = 1.0f/d;
-    float2 q = make_float2(num.x*invd, num.y*invd);
-    // -2i*q = (2*q.y, -2*q.x)
-    return make_float2(2.0f*q.y, -2.0f*q.x);
+    double s = sin(z);
+    double c = cos(z);
+    return make_double2(s/z, (1.0 - c)/z);
   }
+}
+
+__device__ __forceinline__ double2 E_prime_d(double z) {
+  double az = fabs(z);
+  double threshold = 1e-4;
+  if (az < threshold) {
+    double z2 = z*z, z3 = z2*z, z4 = z2*z2;
+    double real = -z/3.0 + z3/30.0;
+    double imag = 0.5 - z2/8.0 + z4/144.0;
+    return make_double2(real, imag);
+  } else {
+    double s = sin(z);
+    double c = cos(z);
+    double z2 = z*z;
+    double re = (z*c - s)/z2;
+    double im = (z*s - (1.0 - c))/z2;
+    return make_double2(re, im);
+  }
+}
+
+__device__ __forceinline__ double2 Phi_ab_d(double alpha, double beta) {
+  double d = beta - alpha;
+  double threshold = 1e-3;  // Match CPU: 1e-3
+  if (fabs(d) < threshold) {
+    double2 Ep = E_prime_d(0.5*(alpha+beta));
+    return make_double2(2.0*Ep.y, -2.0*Ep.x);
+  } else {
+    double2 Ea = E_func_d(alpha);
+    double2 Eb = E_func_d(beta);
+    double2 num = make_double2(Eb.x - Ea.x, Eb.y - Ea.y);
+    double invd = 1.0/d;
+    double2 q = make_double2(num.x*invd, num.y*invd);
+    return make_double2(2.0*q.y, -2.0*q.x);
+  }
+}
+
+// Conversion helper (kept for compatibility, but should not be needed with full double)
+__device__ __forceinline__ double2 double2_to_float2(double2 d) {
+  return d;  // No-op since we're using double everywhere
 }
 
 // ===================== kernel =====================
@@ -158,35 +192,36 @@ void accumulate_intersection_volume_kernel(
   const DiskPacked* __restrict__ disks2, int ND2,
   const GaussianPacked* __restrict__ gaussians2, int NG2,
   int type2,
-  const float3*  __restrict__ kdirs,      // Q
+  const double3*  __restrict__ kdirs,      // Q
   const double*  __restrict__ weights_k,  // Q
-  const float*   __restrict__ kmags,      // Q: k=tan(t)
+  const double*   __restrict__ kmags,      // Q: k=tan(t)
   int Q,
   double* out_scalar
 ){
   int q = blockIdx.x;
   if (q >= Q) return;
 
-  float3 u = kdirs[q];
-  float  k = kmags[q];
-  float  kx = k*u.x, ky = k*u.y, kz = k*u.z;
+  double3 u = kdirs[q];
+  double  k = kmags[q];
+  double  kx = k*u.x, ky = k*u.y, kz = k*u.z;
 
   // Accumulate A1_parallel(k) for geometry 1
   // type1: 0 = GEOM_TRIANGLE, 1 = GEOM_DISK, 2 = GEOM_GAUSSIAN
-  float2 A1; A1.x = A1.y = 0.0f;
+  double2 A1; A1.x = A1.y = 0.0;
 
   if (type1 == 0) {  // GEOM_TRIANGLE
     // Triangle mesh
     if (NF1 > 0) {
       for (int i = threadIdx.x; i < NF1; i += blockDim.x) {
         TriPacked t = tris1[i];
-        float alpha = kx * t.e1.x + ky * t.e1.y + kz * t.e1.z;
-        float beta = kx * t.e2.x + ky * t.e2.y + kz * t.e2.z;
-        float gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
-        float2 phi = Phi_ab(alpha, beta);
-        float phase = kx * t.a.x + ky * t.a.y + kz * t.a.z;
-        float2 expp = cexp_i(phase);
-        float2 scal = cmul(expp, phi);
+        double alpha = kx * t.e1.x + ky * t.e1.y + kz * t.e1.z;
+        double beta = kx * t.e2.x + ky * t.e2.y + kz * t.e2.z;
+        double gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
+        
+        double2 phi = Phi_ab_d(alpha, beta);
+        double phase = kx * t.a.x + ky * t.a.y + kz * t.a.z;
+        double2 expp = cexp_i(phase);
+        double2 scal = cmul(expp, phi);
         A1.x += scal.x * gamma;
         A1.y += scal.y * gamma;
       }
@@ -195,25 +230,25 @@ void accumulate_intersection_volume_kernel(
     if (ND1 > 0) {
       for (int i = threadIdx.x; i < ND1; i += blockDim.x) {
         DiskPacked disk = disks1[i];
-        if (disk.rho > 0.0f && disk.area >= 0.0f) {
-          float kpar_coeff = fmaf(u.x, disk.n.x, fmaf(u.y, disk.n.y, u.z * disk.n.z));
-          float kdotn = k * kpar_coeff;
-          float r2 = fmaxf(k * k - kdotn * kdotn, 0.0f);
-          float r = sqrtf(r2);
+        if (disk.rho > 0.0 && disk.area >= 0.0) {
+          double kpar_coeff = fma(u.x, disk.n.x, fma(u.y, disk.n.y, u.z * disk.n.z));
+          double kdotn = k * kpar_coeff;
+          double r2 = fmax(k * k - kdotn * kdotn, 0.0);
+          double r = sqrt(r2);
 
-          float phase = fmaf(kx, disk.c.x, fmaf(ky, disk.c.y, kz * disk.c.z));
-          float2 eikc = cexp_i(phase);
+          double phase = fma(kx, disk.c.x, fma(ky, disk.c.y, kz * disk.c.z));
+          double2 eikc = cexp_i(phase);
 
-          float Smag;
-          if (r < 1e-6f) {
+          double Smag;
+          if (r < 1e-6) {
             Smag = disk.area;
           } else {
-            float x = fminf(disk.rho * r, 100.0f);
-            Smag = disk.area * 2.0f * J1_over_x(x);
+            double x = fmin(disk.rho * r, 100.0);
+            Smag = disk.area * 2.0 * J1_over_x(x);
           }
 
-          float Apar = kpar_coeff * Smag;
-          if (!isfinite(Apar)) Apar = 0.0f;
+          double Apar = kpar_coeff * Smag;
+          if (!isfinite(Apar)) Apar = 0.0;
 
           A1.x += eikc.x * Apar;
           A1.y += eikc.y * Apar;
@@ -224,20 +259,20 @@ void accumulate_intersection_volume_kernel(
     if (NG1 > 0) {
       for (int i = threadIdx.x; i < NG1; i += blockDim.x) {
         GaussianPacked g = gaussians1[i];
-        if (g.sigma > 0.0f && g.w >= 0.0f) {
-          float kpar_coeff = fmaf(u.x, g.n.x, fmaf(u.y, g.n.y, u.z * g.n.z));
-          float kdotn = k * kpar_coeff;
-          float r2 = fmaxf(k * k - kdotn * kdotn, 0.0f);  // ||k_perp||^2
+        if (g.sigma > 0.0 && g.w >= 0.0) {
+          double kpar_coeff = fma(u.x, g.n.x, fma(u.y, g.n.y, u.z * g.n.z));
+          double kdotn = k * kpar_coeff;
+          double r2 = fmax(k * k - kdotn * kdotn, 0.0);  // ||k_perp||^2
           
-          float phase = fmaf(kx, g.c.x, fmaf(ky, g.c.y, kz * g.c.z));
-          float2 eikc = cexp_i(phase);
+          double phase = fma(kx, g.c.x, fma(ky, g.c.y, kz * g.c.z));
+          double2 eikc = cexp_i(phase);
           
           // S_gauss(k) = w * exp(-0.5 * sigma^2 * ||k_perp||^2)
-          float exp_arg = -0.5f * g.sigma * g.sigma * r2;
-          float Smag = g.w * expf(exp_arg);
+          double exp_arg = -0.5 * g.sigma * g.sigma * r2;
+          double Smag = g.w * exp(exp_arg);
           
-          float Apar = kpar_coeff * Smag;
-          if (!isfinite(Apar)) Apar = 0.0f;
+          double Apar = kpar_coeff * Smag;
+          if (!isfinite(Apar)) Apar = 0.0;
           
           A1.x += eikc.x * Apar;
           A1.y += eikc.y * Apar;
@@ -248,20 +283,21 @@ void accumulate_intersection_volume_kernel(
 
   // Accumulate A2_parallel(k) for geometry 2
   // type2: 0 = GEOM_TRIANGLE, 1 = GEOM_DISK, 2 = GEOM_GAUSSIAN
-  float2 A2; A2.x = A2.y = 0.0f;
+  double2 A2; A2.x = A2.y = 0.0;
 
   if (type2 == 0) {  // GEOM_TRIANGLE
     // Triangle mesh
     if (NF2 > 0) {
       for (int i = threadIdx.x; i < NF2; i += blockDim.x) {
         TriPacked t = tris2[i];
-        float alpha = kx * t.e1.x + ky * t.e1.y + kz * t.e1.z;
-        float beta = kx * t.e2.x + ky * t.e2.y + kz * t.e2.z;
-        float gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
-        float2 phi = Phi_ab(alpha, beta);
-        float phase = kx * t.a.x + ky * t.a.y + kz * t.a.z;
-        float2 expp = cexp_i(phase);
-        float2 scal = cmul(expp, phi);
+        double alpha = kx * t.e1.x + ky * t.e1.y + kz * t.e1.z;
+        double beta = kx * t.e2.x + ky * t.e2.y + kz * t.e2.z;
+        double gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
+        
+        double2 phi = Phi_ab_d(alpha, beta);
+        double phase = kx * t.a.x + ky * t.a.y + kz * t.a.z;
+        double2 expp = cexp_i(phase);
+        double2 scal = cmul(expp, phi);
         A2.x += scal.x * gamma;
         A2.y += scal.y * gamma;
       }
@@ -270,25 +306,25 @@ void accumulate_intersection_volume_kernel(
     if (ND2 > 0) {
       for (int i = threadIdx.x; i < ND2; i += blockDim.x) {
         DiskPacked disk = disks2[i];
-        if (disk.rho > 0.0f && disk.area > 0.0f) {
-          float kpar_coeff = fmaf(u.x, disk.n.x, fmaf(u.y, disk.n.y, u.z * disk.n.z));
-          float kdotn = k * kpar_coeff;
-          float r2 = fmaxf(k * k - kdotn * kdotn, 0.0f);
-          float r = sqrtf(r2);
+        if (disk.rho > 0.0 && disk.area > 0.0) {
+          double kpar_coeff = fma(u.x, disk.n.x, fma(u.y, disk.n.y, u.z * disk.n.z));
+          double kdotn = k * kpar_coeff;
+          double r2 = fmax(k * k - kdotn * kdotn, 0.0);
+          double r = sqrt(r2);
 
-          float phase = fmaf(kx, disk.c.x, fmaf(ky, disk.c.y, kz * disk.c.z));
-          float2 eikc = cexp_i(phase);
+          double phase = fma(kx, disk.c.x, fma(ky, disk.c.y, kz * disk.c.z));
+          double2 eikc = cexp_i(phase);
 
-          float Smag;
-          if (r < 1e-6f) {
+          double Smag;
+          if (r < 1e-6) {
             Smag = disk.area;
           } else {
-            float x = fminf(disk.rho * r, 100.0f);
-            Smag = disk.area * 2.0f * J1_over_x(x);
+            double x = fmin(disk.rho * r, 100.0);
+            Smag = disk.area * 2.0 * J1_over_x(x);
           }
 
-          float Apar = kpar_coeff * Smag;
-          if (!isfinite(Apar)) Apar = 0.0f;
+          double Apar = kpar_coeff * Smag;
+          if (!isfinite(Apar)) Apar = 0.0;
 
           A2.x += eikc.x * Apar;
           A2.y += eikc.y * Apar;
@@ -299,20 +335,20 @@ void accumulate_intersection_volume_kernel(
     if (NG2 > 0) {
       for (int i = threadIdx.x; i < NG2; i += blockDim.x) {
         GaussianPacked g = gaussians2[i];
-        if (g.sigma > 0.0f && g.w >= 0.0f) {
-          float kpar_coeff = fmaf(u.x, g.n.x, fmaf(u.y, g.n.y, u.z * g.n.z));
-          float kdotn = k * kpar_coeff;
-          float r2 = fmaxf(k * k - kdotn * kdotn, 0.0f);  // ||k_perp||^2
+        if (g.sigma > 0.0 && g.w >= 0.0) {
+          double kpar_coeff = fma(u.x, g.n.x, fma(u.y, g.n.y, u.z * g.n.z));
+          double kdotn = k * kpar_coeff;
+          double r2 = fmax(k * k - kdotn * kdotn, 0.0);  // ||k_perp||^2
           
-          float phase = fmaf(kx, g.c.x, fmaf(ky, g.c.y, kz * g.c.z));
-          float2 eikc = cexp_i(phase);
+          double phase = fma(kx, g.c.x, fma(ky, g.c.y, kz * g.c.z));
+          double2 eikc = cexp_i(phase);
           
           // S_gauss(k) = w * exp(-0.5 * sigma^2 * ||k_perp||^2)
-          float exp_arg = -0.5f * g.sigma * g.sigma * r2;
-          float Smag = g.w * expf(exp_arg);
+          double exp_arg = -0.5 * g.sigma * g.sigma * r2;
+          double Smag = g.w * exp(exp_arg);
           
-          float Apar = kpar_coeff * Smag;
-          if (!isfinite(Apar)) Apar = 0.0f;
+          double Apar = kpar_coeff * Smag;
+          if (!isfinite(Apar)) Apar = 0.0;
           
           A2.x += eikc.x * Apar;
           A2.y += eikc.y * Apar;
@@ -322,10 +358,10 @@ void accumulate_intersection_volume_kernel(
   }
 
   // Tree reduction using shared memory
-  __shared__ float s_A1_x[256];
-  __shared__ float s_A1_y[256];
-  __shared__ float s_A2_x[256];
-  __shared__ float s_A2_y[256];
+  __shared__ double s_A1_x[256];
+  __shared__ double s_A1_y[256];
+  __shared__ double s_A2_x[256];
+  __shared__ double s_A2_y[256];
   
   int tid = threadIdx.x;
   if (tid < blockDim.x) {
@@ -349,7 +385,7 @@ void accumulate_intersection_volume_kernel(
   }
   
   if (tid == 0) {
-    float dot_real = s_A1_x[0] * s_A2_x[0] + s_A1_y[0] * s_A2_y[0];
+    double dot_real = s_A1_x[0] * s_A2_x[0] + s_A1_y[0] * s_A2_y[0];
     atomicAdd(out_scalar, weights_k[q] * dot_real);
   }
 }
@@ -388,8 +424,8 @@ static double compute_intersection_volume_cuda_impl(
   TriPacked* d_tris2=nullptr;
   GaussianPacked* d_gaussians1=nullptr;
   GaussianPacked* d_gaussians2=nullptr;
-  float3*     d_dirs=nullptr;
-  float*      d_kmag=nullptr;
+  double3*     d_dirs=nullptr;
+  double*      d_kmag=nullptr;
   double*    d_w=nullptr;
   double*    d_out=nullptr;
 
@@ -420,8 +456,8 @@ static double compute_intersection_volume_cuda_impl(
   CUDA_CHECK(cudaMalloc(&d_tris2, (NF2 > 0 ? NF2 : 1) * sizeof(TriPacked)));
   CUDA_CHECK(cudaMalloc(&d_disks2, (ND2 > 0 ? ND2 : 1) * sizeof(DiskPacked)));
   CUDA_CHECK(cudaMalloc(&d_gaussians2, (NG2 > 0 ? NG2 : 1) * sizeof(GaussianPacked)));
-  CUDA_CHECK(cudaMalloc(&d_dirs, Q *sizeof(float3)));
-  CUDA_CHECK(cudaMalloc(&d_kmag, Q *sizeof(float)));
+  CUDA_CHECK(cudaMalloc(&d_dirs, Q *sizeof(double3)));
+  CUDA_CHECK(cudaMalloc(&d_kmag, Q *sizeof(double)));
   CUDA_CHECK(cudaMalloc(&d_w,    Q *sizeof(double)));
   CUDA_CHECK(cudaMalloc(&d_out,  sizeof(double)));
   auto t_malloc_end = std::chrono::high_resolution_clock::now();
@@ -446,12 +482,12 @@ static double compute_intersection_volume_cuda_impl(
     CUDA_CHECK(cudaMemcpy(d_gaussians2, gaussians2.data(), NG2 * sizeof(GaussianPacked), cudaMemcpyHostToDevice));
   }
   
-  std::vector<float3> hdirs(Q);
+  std::vector<double3> hdirs(Q);
   for (int q = 0; q < Q; ++q) {
-    hdirs[q] = make_float3(KG.dirs[q][0], KG.dirs[q][1], KG.dirs[q][2]);
+    hdirs[q] = make_double3((double)KG.dirs[q][0], (double)KG.dirs[q][1], (double)KG.dirs[q][2]);
   }
-  CUDA_CHECK(cudaMemcpy(d_dirs, hdirs.data(), Q * sizeof(float3), cudaMemcpyHostToDevice));
-  CUDA_CHECK(cudaMemcpy(d_kmag, KG.kmag.data(), Q * sizeof(float), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_dirs, hdirs.data(), Q * sizeof(double3), cudaMemcpyHostToDevice));
+  CUDA_CHECK(cudaMemcpy(d_kmag, KG.kmag.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_w, KG.w.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
   
   double zero = 0.0;

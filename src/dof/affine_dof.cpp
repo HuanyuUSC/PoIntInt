@@ -69,10 +69,10 @@ Geometry AffineDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) con
           Eigen::Vector3d e2 = A * Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z);
           Eigen::Vector3d S = 0.5 * e1.cross(e2);
           
-          tri.a = make_float3((float)a.x(), (float)a.y(), (float)a.z());
-          tri.e1 = make_float3((float)e1.x(), (float)e1.y(), (float)e1.z());
-          tri.e2 = make_float3((float)e2.x(), (float)e2.y(), (float)e2.z());
-          tri.S = make_float3((float)S.x(), (float)S.y(), (float)S.z());
+          tri.a = make_double3(a.x(), a.y(), a.z());
+          tri.e1 = make_double3(e1.x(), e1.y(), e1.z());
+          tri.e2 = make_double3(e2.x(), e2.y(), e2.z());
+          tri.S = make_double3(S.x(), S.y(), S.z());
         }
       });
   } else if (geom.type == GEOM_DISK) {
@@ -91,11 +91,11 @@ Geometry AffineDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) con
           n.normalize();
           
           // Scale radius by average scale factor (geometric mean of scale factors)
-          disk.rho *= (float)scale_factor;
-          disk.area *= (float)area_scale;  // Adjust area
+          disk.rho *= scale_factor;
+          disk.area *= area_scale;  // Adjust area
           
-          disk.c = make_float3((float)c.x(), (float)c.y(), (float)c.z());
-          disk.n = make_float3((float)n.x(), (float)n.y(), (float)n.z());
+          disk.c = make_double3(c.x(), c.y(), c.z());
+          disk.n = make_double3(n.x(), n.y(), n.z());
         }
       });
   } else if (geom.type == GEOM_GAUSSIAN) {
@@ -114,11 +114,11 @@ Geometry AffineDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) con
           n.normalize();
           
           // Scale sigma by average scale factor
-          gauss.sigma *= (float)scale_factor;
-          gauss.w *= (float)weight_scale;  // Adjust weight
+          gauss.sigma *= scale_factor;
+          gauss.w *= weight_scale;  // Adjust weight
           
-          gauss.c = make_float3((float)c.x(), (float)c.y(), (float)c.z());
-          gauss.n = make_float3((float)n.x(), (float)n.y(), (float)n.z());
+          gauss.c = make_double3(c.x(), c.y(), c.z());
+          gauss.n = make_double3(n.x(), n.y(), n.z());
         }
       });
   }
