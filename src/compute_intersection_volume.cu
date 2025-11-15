@@ -31,6 +31,8 @@ using PoIntInt::Phi_ab;
 using PoIntInt::TriPacked;
 using PoIntInt::DiskPacked;
 using PoIntInt::GaussianPacked;
+using PoIntInt::get_geometry_type_name;
+using PoIntInt::get_geometry_element_name;
 
 extern "C" __global__
 void accumulate_intersection_volume_kernel(
@@ -387,20 +389,10 @@ static double compute_intersection_volume_cuda_impl(
   if (enable_profiling) {
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "\n=== CUDA Volume Computation Profiler ===" << std::endl;
-    if (type1 == GEOM_TRIANGLE) {
-      std::cout << "Geometry 1: Triangle mesh (" << NF1 << " faces)" << std::endl;
-    } else if (type1 == GEOM_DISK) {
-      std::cout << "Geometry 1: Point cloud (" << ND1 << " disks)" << std::endl;
-    } else {
-      std::cout << "Geometry 1: Gaussian splats (" << NG1 << " gaussians)" << std::endl;
-    }
-    if (type2 == GEOM_TRIANGLE) {
-      std::cout << "Geometry 2: Triangle mesh (" << NF2 << " faces)" << std::endl;
-    } else if (type2 == GEOM_DISK) {
-      std::cout << "Geometry 2: Point cloud (" << ND2 << " disks)" << std::endl;
-    } else {
-      std::cout << "Geometry 2: Gaussian splats (" << NG2 << " gaussians)" << std::endl;
-    }
+    int count1 = (type1 == GEOM_TRIANGLE) ? NF1 : ((type1 == GEOM_DISK) ? ND1 : NG1);
+    int count2 = (type2 == GEOM_TRIANGLE) ? NF2 : ((type2 == GEOM_DISK) ? ND2 : NG2);
+    std::cout << "Geometry 1: " << get_geometry_type_name(type1) << " (" << count1 << " " << get_geometry_element_name(type1) << ")" << std::endl;
+    std::cout << "Geometry 2: " << get_geometry_type_name(type2) << " (" << count2 << " " << get_geometry_element_name(type2) << ")" << std::endl;
     std::cout << "K-grid nodes: " << Q << std::endl;
     std::cout << "Block size: " << blockSize << std::endl;
     std::cout << "--- Timing (ms) ---" << std::endl;
@@ -490,20 +482,10 @@ double compute_intersection_volume_cpu(
     
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "\n=== CPU Volume Computation Profiler ===" << std::endl;
-    if (geom1.type == GEOM_TRIANGLE) {
-      std::cout << "Geometry 1: Triangle mesh (" << geom1.tris.size() << " faces)" << std::endl;
-    } else if (geom1.type == GEOM_DISK) {
-      std::cout << "Geometry 1: Point cloud (" << geom1.disks.size() << " disks)" << std::endl;
-    } else {
-      std::cout << "Geometry 1: Gaussian splats (" << geom1.gaussians.size() << " gaussians)" << std::endl;
-    }
-    if (geom2.type == GEOM_TRIANGLE) {
-      std::cout << "Geometry 2: Triangle mesh (" << geom2.tris.size() << " faces)" << std::endl;
-    } else if (geom2.type == GEOM_DISK) {
-      std::cout << "Geometry 2: Point cloud (" << geom2.disks.size() << " disks)" << std::endl;
-    } else {
-      std::cout << "Geometry 2: Gaussian splats (" << geom2.gaussians.size() << " gaussians)" << std::endl;
-    }
+    int count1 = (geom1.type == GEOM_TRIANGLE) ? (int)geom1.tris.size() : ((geom1.type == GEOM_DISK) ? (int)geom1.disks.size() : (int)geom1.gaussians.size());
+    int count2 = (geom2.type == GEOM_TRIANGLE) ? (int)geom2.tris.size() : ((geom2.type == GEOM_DISK) ? (int)geom2.disks.size() : (int)geom2.gaussians.size());
+    std::cout << "Geometry 1: " << get_geometry_type_name(geom1.type) << " (" << count1 << " " << get_geometry_element_name(geom1.type) << ")" << std::endl;
+    std::cout << "Geometry 2: " << get_geometry_type_name(geom2.type) << " (" << count2 << " " << get_geometry_element_name(geom2.type) << ")" << std::endl;
     std::cout << "K-grid nodes: " << Q << std::endl;
     std::cout << "--- Timing (ms) ---" << std::endl;
     std::cout << "  Computation:      " << std::setw(8) << compute_time << " ms" << std::endl;

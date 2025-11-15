@@ -6,6 +6,7 @@
 #include <chrono>
 #include <iostream>
 #include <iomanip>
+#include <string>
 #include <tbb/parallel_for.h>
 #include <tbb/blocked_range.h>
 #include <Eigen/Dense>
@@ -148,10 +149,26 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cpu(
         total_gaussians += (int)geom.gaussians.size();
       }
     }
-    std::cout << "Geometry types: " << num_meshes << " meshes, " << num_pointclouds << " point clouds, " << num_gaussians << " Gaussian splats" << std::endl;
-    if (total_tris > 0) std::cout << "Total triangles: " << total_tris << std::endl;
-    if (total_disks > 0) std::cout << "Total disks: " << total_disks << std::endl;
-    if (total_gaussians > 0) std::cout << "Total Gaussians: " << total_gaussians << std::endl;
+    // Build geometry types string
+    std::string geom_types_str;
+    if (num_meshes > 0) {
+      geom_types_str += std::to_string(num_meshes) + " " + get_geometry_type_name(GEOM_TRIANGLE);
+      if (num_meshes > 1) geom_types_str += "s";  // Pluralize
+    }
+    if (num_pointclouds > 0) {
+      if (!geom_types_str.empty()) geom_types_str += ", ";
+      geom_types_str += std::to_string(num_pointclouds) + " " + get_geometry_type_name(GEOM_DISK);
+      if (num_pointclouds > 1) geom_types_str += "s";  // Pluralize
+    }
+    if (num_gaussians > 0) {
+      if (!geom_types_str.empty()) geom_types_str += ", ";
+      geom_types_str += std::to_string(num_gaussians) + " " + get_geometry_type_name(GEOM_GAUSSIAN);
+      if (num_gaussians > 1) geom_types_str += "s";  // Pluralize
+    }
+    std::cout << "Geometry types: " << geom_types_str << std::endl;
+    if (total_tris > 0) std::cout << "Total " << get_geometry_element_name(GEOM_TRIANGLE) << ": " << total_tris << std::endl;
+    if (total_disks > 0) std::cout << "Total " << get_geometry_element_name(GEOM_DISK) << ": " << total_disks << std::endl;
+    if (total_gaussians > 0) std::cout << "Total " << get_geometry_element_name(GEOM_GAUSSIAN) << ": " << total_gaussians << std::endl;
     
     std::cout << "--- Timing (ms) ---" << std::endl;
     std::cout << "  Phase 1 (Form Factor J): " << std::setw(8) << phase1_time << " ms" << std::endl;

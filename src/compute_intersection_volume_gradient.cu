@@ -179,19 +179,26 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
   num_dofs1 = (int)dofs1.size();
   num_dofs2 = (int)dofs2.size();
   
-  // Check geometry types - for now, only support triangle meshes
-  // TODO: Add support for disks and Gaussian splats
-  if (geom1.type != GEOM_TRIANGLE || geom2.type != GEOM_TRIANGLE) {
-    std::cerr << "Error: Only triangle meshes are currently supported for CUDA gradient computation" << std::endl;
-    result.grad_geom1 = Eigen::VectorXd::Zero(num_dofs1);
-    result.grad_geom2 = Eigen::VectorXd::Zero(num_dofs2);
-    result.volume = 0.0;
-    return result;
+  // Get geometry sizes for profiling
+  if (geom1.type == GEOM_TRIANGLE) {
+    NF1 = (int)geom1.tris.size();
+  } else if (geom1.type == GEOM_DISK) {
+    NF1 = (int)geom1.disks.size();
+  } else if (geom1.type == GEOM_GAUSSIAN) {
+    NF1 = (int)geom1.gaussians.size();
+  } else {
+    NF1 = 0;
   }
   
-  // Get geometry sizes for profiling
-  NF1 = (int)geom1.tris.size();
-  NF2 = (int)geom2.tris.size();
+  if (geom2.type == GEOM_TRIANGLE) {
+    NF2 = (int)geom2.tris.size();
+  } else if (geom2.type == GEOM_DISK) {
+    NF2 = (int)geom2.disks.size();
+  } else if (geom2.type == GEOM_GAUSSIAN) {
+    NF2 = (int)geom2.gaussians.size();
+  } else {
+    NF2 = 0;
+  }
   
   t_alloc_start = std::chrono::high_resolution_clock::now();
   
@@ -295,8 +302,8 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(
     
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "\n=== CUDA Intersection Volume Gradient Profiler ===" << std::endl;
-    std::cout << "Geometry 1: " << dof_type1 << " with " << NF1 << " triangles" << std::endl;
-    std::cout << "Geometry 2: " << dof_type2 << " with " << NF2 << " triangles" << std::endl;
+    std::cout << "Geometry 1: " << get_geometry_type_name(geom1.type) << " (" << NF1 << " " << get_geometry_element_name(geom1.type) << "), DoF: " << dof_type1 << std::endl;
+    std::cout << "Geometry 2: " << get_geometry_type_name(geom2.type) << " (" << NF2 << " " << get_geometry_element_name(geom2.type) << "), DoF: " << dof_type2 << std::endl;
     std::cout << "K-grid nodes: " << Q << std::endl;
     std::cout << "DoFs per geometry: " << num_dofs1 << ", " << num_dofs2 << std::endl;
     std::cout << "--- Timing (ms) ---" << std::endl;

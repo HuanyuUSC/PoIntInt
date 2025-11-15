@@ -40,5 +40,24 @@ enum GeometryType {
   GEOM_GAUSSIAN = 2
 };
 
+// Helper functions to get geometry type names
+inline const char* get_geometry_type_name(GeometryType type) {
+  switch (type) {
+    case GEOM_TRIANGLE: return "Triangle mesh";
+    case GEOM_DISK: return "Point cloud";
+    case GEOM_GAUSSIAN: return "Gaussian splat";
+    default: return "Unknown";
+  }
+}
+
+inline const char* get_geometry_element_name(GeometryType type) {
+  switch (type) {
+    case GEOM_TRIANGLE: return "triangles";
+    case GEOM_DISK: return "disks";
+    case GEOM_GAUSSIAN: return "gaussians";
+    default: return "elements";
+  }
+}
+
 } // namespace PoIntInt
 

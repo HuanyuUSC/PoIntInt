@@ -19,6 +19,8 @@ using PoIntInt::GeometryType;
 using PoIntInt::GEOM_TRIANGLE;
 using PoIntInt::GEOM_DISK;
 using PoIntInt::GEOM_GAUSSIAN;
+using PoIntInt::get_geometry_type_name;
+using PoIntInt::get_geometry_element_name;
 
 // ===================== Kernel =====================
 // Compute volume using divergence theorem: V = (1/3) ∫_S (x, y, z) · n dS
@@ -217,13 +219,8 @@ double compute_volume_cuda(
     
     std::cout << std::fixed << std::setprecision(3);
     std::cout << "\n=== CUDA Volume Computation (Divergence Theorem) ===" << std::endl;
-    if (geom.type == GEOM_TRIANGLE) {
-      std::cout << "Geometry: Triangle mesh (" << NF << " faces)" << std::endl;
-    } else if (geom.type == GEOM_DISK) {
-      std::cout << "Geometry: Point cloud (" << ND << " disks)" << std::endl;
-    } else {
-      std::cout << "Geometry: Gaussian splats (" << NG << " gaussians)" << std::endl;
-    }
+    int count = (geom.type == GEOM_TRIANGLE) ? NF : ((geom.type == GEOM_DISK) ? ND : NG);
+    std::cout << "Geometry: " << get_geometry_type_name(geom.type) << " (" << count << " " << get_geometry_element_name(geom.type) << ")" << std::endl;
     std::cout << "Block size: " << blockSize << std::endl;
     std::cout << "--- Timing (ms) ---" << std::endl;
     std::cout << "  Memory allocation: " << std::setw(8) << malloc_time << " ms" << std::endl;
