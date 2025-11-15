@@ -7,10 +7,18 @@
 
 namespace PoIntInt {
 
-// Thread-safe registry
-std::unordered_map<std::string, std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>> 
-  CudaKernelRegistry::registry_;
-static std::mutex registry_mutex;
+// Thread-safe registry using function-local static to ensure proper initialization order
+// This uses Meyers' singleton pattern to avoid static initialization order issues
+static std::unordered_map<std::string, std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>>& 
+  get_registry() {
+  static std::unordered_map<std::string, std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>> registry;
+  return registry;
+}
+
+static std::mutex& get_registry_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
 
 void CudaKernelRegistry::register_kernels(
   const std::string& dof_type,
@@ -18,23 +26,24 @@ void CudaKernelRegistry::register_kernels(
   CudaComputeAkFunc compute_Ak,
   CudaComputeAkGradientFunc compute_Ak_gradient)
 {
-  std::lock_guard<std::mutex> lock(registry_mutex);
+  std::lock_guard<std::mutex> lock(get_registry_mutex());
   std::string key = make_key(dof_type, geom_type);
-  registry_[key] = std::make_pair(compute_Ak, compute_Ak_gradient);
+  get_registry()[key] = std::make_pair(compute_Ak, compute_Ak_gradient);
 }
 
 bool CudaKernelRegistry::has_kernels(const std::string& dof_type, GeometryType geom_type) {
-  std::lock_guard<std::mutex> lock(registry_mutex);
+  std::lock_guard<std::mutex> lock(get_registry_mutex());
   std::string key = make_key(dof_type, geom_type);
-  return registry_.find(key) != registry_.end();
+  return get_registry().find(key) != get_registry().end();
 }
 
 std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>
 CudaKernelRegistry::get_kernels(const std::string& dof_type, GeometryType geom_type) {
-  std::lock_guard<std::mutex> lock(registry_mutex);
+  std::lock_guard<std::mutex> lock(get_registry_mutex());
   std::string key = make_key(dof_type, geom_type);
-  auto it = registry_.find(key);
-  if (it != registry_.end()) {
+  auto& registry = get_registry();
+  auto it = registry.find(key);
+  if (it != registry.end()) {
     return it->second;
   }
   return std::make_pair(CudaComputeAkFunc(), CudaComputeAkGradientFunc());

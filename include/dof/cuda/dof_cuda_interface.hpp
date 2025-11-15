@@ -64,9 +64,6 @@ public:
   
   // Get a unique key for a DoF+geometry combination
   static std::string make_key(const std::string& dof_type, GeometryType geom_type);
-  
-private:
-  static std::unordered_map<std::string, std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>> registry_;
 };
 
 // Helper function to get DoF type name from a DoFParameterization pointer
