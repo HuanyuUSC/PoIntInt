@@ -11,105 +11,12 @@
 #include "compute_intersection_volume_multi_object.hpp"
 #include "geometry/geometry.hpp"
 #include "geometry/types.hpp"
+#include "cuda/cuda_helpers.hpp"
 
-// Reuse utility functions from compute_volume.cu
-// (In a real implementation, these would be in a shared header)
-__device__ __forceinline__ double2 cmul(double2 a, double2 b) {
-  return make_double2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x);
-}
-
-__device__ __forceinline__ double2 cexp_i(double phase) {
-  double s, c;
-  sincos(phase, &s, &c);
-  return make_double2(c, s);
-}
-
-__device__ __forceinline__ double J1_over_x(double x) {
-  double ax = fabs(x);
-  if (ax < 1e-3) {
-    double x2 = x * x;
-    double t = 0.5;
-    t += (-1.0 / 16.0) * x2;
-    double x4 = x2 * x2;
-    t += (1.0 / 384.0) * x4;
-    double x6 = x4 * x2;
-    t += (-1.0 / 18432.0) * x6;
-    return t;
-  }
-  if (ax <= 12.0) {
-    double q = 0.25 * x * x;
-    double term = 0.5;
-    double sum = term;
-#pragma unroll
-    for (int m = 0; m < 20; ++m) {
-      double denom = (double)(m + 1) * (double)(m + 2);
-      term *= -q / denom;
-      sum += term;
-      if (fabs(term) < 1e-7 * fabs(sum)) break;
-    }
-    return sum;
-  }
-  double invx = 1.0 / ax;
-  double invx2 = invx * invx;
-  double invx3 = invx2 * invx;
-  double chi = ax - 0.75 * CUDART_PI;
-  double s, c;
-  sincos(chi, &s, &c);
-  double amp = sqrt(2.0 / (CUDART_PI * ax));
-  double cosp = (1.0 - 15.0 / 128.0 * invx2) * c;
-  double sinp = (3.0 / 8.0 * invx - 315.0 / 3072.0 * invx3) * s;
-  double J1 = amp * (cosp - sinp);
-  return J1 * invx;
-}
-
-__device__ __forceinline__ double2 E_func(double z) {
-  double az = fabs(z);
-  double threshold = 1e-4;
-  if (az < threshold) {
-    double z2 = z*z, z4 = z2*z2;
-    double real = 1.0 - z2*(1.0/6.0) + z4*(1.0/120.0);
-    double imag = z*(0.5) - z*z2*(1.0/24.0) + z4*z*(1.0/720.0);
-    return make_double2(real, imag);
-  } else {
-    double s, c;
-    sincos(z, &s, &c);
-    return make_double2(s/z, (1.0 - c)/z);
-  }
-}
-
-__device__ __forceinline__ double2 E_prime(double z) {
-  double az = fabs(z);
-  double threshold = 1e-4;
-  if (az < threshold) {
-    double z2 = z*z, z3 = z2*z, z4 = z2*z2;
-    double real = -(1.0/3.0)*z + (1.0/30.0)*z3;
-    double imag = 0.5 - (1.0/8.0)*z2 + (1.0/144.0)*z4;
-    return make_double2(real, imag);
-  } else {
-    double s, c;
-    sincos(z, &s, &c);
-    double z2 = z*z;
-    double re = (z*c - s)/z2;
-    double im = (z*s - (1.0 - c))/z2;
-    return make_double2(re, im);
-  }
-}
-
-__device__ __forceinline__ double2 Phi_ab(double alpha, double beta) {
-  double d = beta - alpha;
-  double threshold = 1e-3;  // Match CPU: 1e-3
-  if (fabs(d) < threshold) {
-    double2 Ep = E_prime(0.5*(alpha+beta));
-    return make_double2(2.0*Ep.y, -2.0*Ep.x);
-  } else {
-    double2 Ea = E_func(alpha);
-    double2 Eb = E_func(beta);
-    double2 num = make_double2(Eb.x - Ea.x, Eb.y - Ea.y);
-    double invd = 1.0/d;
-    double2 q = make_double2(num.x*invd, num.y*invd);
-    return make_double2(2.0*q.y, -2.0*q.x);
-  }
-}
+using PoIntInt::cmul;
+using PoIntInt::cexp_i;
+using PoIntInt::J1_over_x;
+using PoIntInt::Phi_ab;
 
 using PoIntInt::TriPacked;
 using PoIntInt::DiskPacked;

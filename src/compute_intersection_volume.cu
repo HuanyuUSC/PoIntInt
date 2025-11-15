@@ -17,162 +17,12 @@
 #include "geometry/geometry.hpp"
 #include "geometry/types.hpp"
 #include "form_factor_helpers.hpp"
+#include "cuda/cuda_helpers.hpp"
 
-// ===================== utilities =====================
-
-__device__ __forceinline__ double2 cmul(double2 a, double2 b) {
-  return make_double2(a.x*b.x - a.y*b.y, a.x*b.y + a.y*b.x);
-}
-
-__device__ __forceinline__ double2 cexp_i(double phase) {
-  double s, c;
-  sincos(phase, &s, &c);
-  return make_double2(c, s);
-}
-
-// J1_over_x(x) := J1(x)/x  (accurate ~1e-6 in double across full range)
-__device__ __forceinline__ double J1_over_x(double x)
-{
-  double ax = fabs(x);
-
-  // Tiny x: even Taylor up to x^8
-  if (ax < 1e-3) {
-    double x2 = x * x;
-    double t = 0.5;                      // 1/2
-    t += (-1.0 / 16.0) * x2;              // - x^2/16
-    double x4 = x2 * x2;
-    t += (1.0 / 384.0) * x4;              // + x^4/384
-    double x6 = x4 * x2;
-    t += (-1.0 / 18432.0) * x6;           // - x^6/18432
-    return t;
-  }
-
-  // Small–moderate x: stable series with term recurrence
-  if (ax <= 12.0) {
-    double q = 0.25 * x * x;            // x^2/4
-    double term = 0.5;                    // m=0
-    double sum = term;
-#pragma unroll
-    for (int m = 0; m < 20; ++m) {
-      double denom = (double)(m + 1) * (double)(m + 2);
-      term *= -q / denom;              // term_{m+1}
-      sum += term;
-      if (fabs(term) < 1e-7 * fabs(sum)) break;
-    }
-    return sum;
-  }
-
-  // Large x: Hankel asymptotics (3 correction terms), then divide by x
-  double invx = 1.0 / ax;
-  double invx2 = invx * invx;
-  double invx3 = invx2 * invx;
-
-  double chi = ax - 0.75 * CUDART_PI;
-  double s, c;
-  sincos(chi, &s, &c);
-
-  double amp = sqrt(2.0 / (CUDART_PI * ax));
-  double cosp = (1.0 - 15.0 / 128.0 * invx2) * c;
-  double sinp = (3.0 / 8.0 * invx - 315.0 / 3072.0 * invx3) * s;
-  double J1 = amp * (cosp - sinp);
-  return J1 * invx;                          // J1(x)/x
-}
-
-
-// E(z) = (sin z + i (1 - cos z)) / z, stable small-z
-__device__ __forceinline__ double2 E_func(double z){
-  double az = fabs(z);
-  double threshold = 1e-4;
-  if (az < threshold){
-    // series: sin z / z ≈ 1 - z^2/6 + z^4/120
-    //         (1 - cos z)/z ≈ z/2 - z^3/24 + z^5/720
-    double z2 = z*z, z4 = z2*z2;
-    double real = 1.0 - z2*(1.0/6.0) + z4*(1.0/120.0);
-    double imag = z*(0.5) - z*z2*(1.0/24.0) + z4*z*(1.0/720.0);
-    return make_double2(real, imag);
-  } else {
-    double s,c; sincos(z, &s, &c);
-    return make_double2(s/z, (1.0 - c)/z);
-  }
-}
-
-// E'(z) = d/dz E(z)  (stable)
-__device__ __forceinline__ double2 E_prime(double z){
-  double az = fabs(z);
-  double threshold = 1e-4;
-  if (az < threshold){
-    // from series:
-    // Re ≈ -(1/3) z + (1/30) z^3
-    // Im ≈  1/2  - (1/8) z^2 + (1/144) z^4
-    double z2 = z*z, z3 = z2*z, z4 = z2*z2;
-    double real = -(1.0/3.0)*z + (1.0/30.0)*z3;
-    double imag =  0.5 - (1.0/8.0)*z2 + (1.0/144.0)*z4;
-    return make_double2(real, imag);
-  } else {
-    double s,c; sincos(z, &s, &c);
-    // Re: (z cos z - sin z)/z^2
-    // Im: (z sin z - (1 - cos z))/z^2
-    double z2 = z*z;
-    double re = (z*c - s)/z2;
-    double im = (z*s - (1.0 - c))/z2;
-    return make_double2(re, im);
-  }
-}
-
-// Double-precision element functions to match CPU implementation
-__device__ __forceinline__ double2 E_func_d(double z) {
-  double az = fabs(z);
-  double threshold = 1e-4;
-  if (az < threshold) {
-    double z2 = z*z, z4 = z2*z2;
-    double real = 1.0 - z2/6.0 + z4/120.0;
-    double imag = z*0.5 - z*z2/24.0 + z4*z/720.0;
-    return make_double2(real, imag);
-  } else {
-    double s = sin(z);
-    double c = cos(z);
-    return make_double2(s/z, (1.0 - c)/z);
-  }
-}
-
-__device__ __forceinline__ double2 E_prime_d(double z) {
-  double az = fabs(z);
-  double threshold = 1e-4;
-  if (az < threshold) {
-    double z2 = z*z, z3 = z2*z, z4 = z2*z2;
-    double real = -z/3.0 + z3/30.0;
-    double imag = 0.5 - z2/8.0 + z4/144.0;
-    return make_double2(real, imag);
-  } else {
-    double s = sin(z);
-    double c = cos(z);
-    double z2 = z*z;
-    double re = (z*c - s)/z2;
-    double im = (z*s - (1.0 - c))/z2;
-    return make_double2(re, im);
-  }
-}
-
-__device__ __forceinline__ double2 Phi_ab_d(double alpha, double beta) {
-  double d = beta - alpha;
-  double threshold = 1e-3;  // Match CPU: 1e-3
-  if (fabs(d) < threshold) {
-    double2 Ep = E_prime_d(0.5*(alpha+beta));
-    return make_double2(2.0*Ep.y, -2.0*Ep.x);
-  } else {
-    double2 Ea = E_func_d(alpha);
-    double2 Eb = E_func_d(beta);
-    double2 num = make_double2(Eb.x - Ea.x, Eb.y - Ea.y);
-    double invd = 1.0/d;
-    double2 q = make_double2(num.x*invd, num.y*invd);
-    return make_double2(2.0*q.y, -2.0*q.x);
-  }
-}
-
-// Conversion helper (kept for compatibility, but should not be needed with full double)
-__device__ __forceinline__ double2 double2_to_float2(double2 d) {
-  return d;  // No-op since we're using double everywhere
-}
+using PoIntInt::cmul;
+using PoIntInt::cexp_i;
+using PoIntInt::J1_over_x;
+using PoIntInt::Phi_ab;
 
 // ===================== kernel =====================
 
@@ -218,7 +68,7 @@ void accumulate_intersection_volume_kernel(
         double beta = kx * t.e2.x + ky * t.e2.y + kz * t.e2.z;
         double gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
         
-        double2 phi = Phi_ab_d(alpha, beta);
+        double2 phi = Phi_ab(alpha, beta);
         double phase = kx * t.a.x + ky * t.a.y + kz * t.a.z;
         double2 expp = cexp_i(phase);
         double2 scal = cmul(expp, phi);
@@ -294,7 +144,7 @@ void accumulate_intersection_volume_kernel(
         double beta = kx * t.e2.x + ky * t.e2.y + kz * t.e2.z;
         double gamma = u.x * t.S.x + u.y * t.S.y + u.z * t.S.z;
         
-        double2 phi = Phi_ab_d(alpha, beta);
+        double2 phi = Phi_ab(alpha, beta);
         double phase = kx * t.a.x + ky * t.a.y + kz * t.a.z;
         double2 expp = cexp_i(phase);
         double2 scal = cmul(expp, phi);
