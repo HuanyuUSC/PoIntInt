@@ -165,47 +165,15 @@ enum class ComputationFlags {
   ALL = VOLUME_ONLY | GRADIENT | HESSIAN
 };
 
-// Result structure for self-volume computation (single geometry)
-struct VolumeResult {
-  double volume;  // Self-volume
-  
-  // Gradients (only computed if requested)
-  Eigen::VectorXd grad;  // Gradient w.r.t. DoFs of the geometry
-  
-  // Hessians (only computed if requested)
-  Eigen::MatrixXd hessian;  // Hessian w.r.t. DoFs of the geometry
-};
-
-// Self-volume computation (divergence theorem) - returns VolumeResult with gradient/Hessian support
-VolumeResult compute_volume_unified_cuda(
-  const Geometry& ref_geom,
-  const std::shared_ptr<DoFParameterization>& dof,
-  const Eigen::VectorXd& dofs,
-  const KGrid& kgrid,
-  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
-  int blockSize = 256,
-  bool enable_profiling = false
-);
-
-// Convenience: no DoF (uses identity AffineDoF)
-double compute_volume_cuda(
-  const Geometry& geom,
-  const KGrid& kgrid,
-  int blockSize = 256,
-  bool enable_profiling = false
-);
-
-// CPU/TBB versions (same interface, different suffix)
-VolumeResult compute_volume_unified_cpu(
-  const Geometry& ref_geom,
-  const std::shared_ptr<DoFParameterization>& dof,
-  const Eigen::VectorXd& dofs,
-  const KGrid& kgrid,
-  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
-  bool enable_profiling = false
-);
-
 // Result structure for intersection volume computation (two geometries)
+// Note: Self-volume computation is NOT part of the unified interface. Self-volume
+// should be computed using the divergence theorem: V = (1/3) ∫_S (x, y, z) · n dS,
+// where S is the boundary surface and n is the outward normal. This requires
+// DoF-specific implementations of local contributions (area weight × n · position)
+// for each element. See DoFParameterization::compute_divergence_contribution()
+// and related methods. This will be implemented in a future phase after the math
+// is worked out. The current compute_volume_cuda() in compute_volume.hpp/.cu uses
+// the divergence theorem but still relies on apply(), which will be removed.
 struct IntersectionVolumeResult {
   double volume;  // Intersection volume
   
@@ -445,7 +413,7 @@ struct IntersectionVolumeMatrixResult {
 
 **Current Limitations:**
 - **Architectural Issue**: Current implementation uses `apply()` to transform geometries, which is incorrect for disks/Gaussians (they become elliptical). Need to refactor to unified interface.
-- Self-volume gradient computation not yet implemented (only volume, not gradient)
+- **Self-Volume Unified Interface**: NOT YET IMPLEMENTED. Self-volume should be computed using the divergence theorem: V = (1/3) ∫_S (x, y, z) · n dS, where S is the boundary surface and n is the outward normal. This requires DoF-specific implementations of local contributions (area weight × n · position) for each element. The base class `DoFParameterization` has placeholder methods (`compute_divergence_contribution()`, `compute_divergence_contribution_gradient()`, `compute_divergence_contribution_hessian()`) but these are not yet implemented in concrete classes. The current `compute_volume_cuda()` in `compute_volume.hpp/.cu` uses the divergence theorem but still relies on `apply()`, which will be removed. Self-volume unified interface will be implemented in a future phase after the math is worked out.
 - Multi-object gradient computation not yet implemented (only volume matrix)
 - Hessian computation not yet implemented
 
@@ -478,7 +446,7 @@ struct IntersectionVolumeMatrixResult {
    - Update `compute_intersection_volume_cuda()` to call unified version with identity DoF
    - Update `compute_intersection_volume_gradient_cuda()` to use unified interface
    - Update multi-object routines similarly
-   - Update self-volume routines similarly
+   - **Self-volume unified interface**: NOT YET IMPLEMENTED. Self-volume should use divergence theorem with DoF-specific local contributions. See note in "Current Limitations" above.
 
 3. **Refactor CPU/TBB Versions**:
    - Same changes as CUDA versions
@@ -577,6 +545,8 @@ Note: This approximation uses only first derivatives and does NOT require `d²A/
 H ≈ (1/(8π³)) · Σ_q w_q · (∂A(k_q)/∂θ) · (∂A(k_q)/∂θ)^T
 ```
 Note: This approximation uses only first derivatives and does NOT require `d²A/dθ²`.
+
+**IMPORTANT**: The above formula is for self-volume computed via form factor field (intersection of geometry with itself). However, the unified interface does NOT implement self-volume this way. Instead, self-volume should be computed using the divergence theorem: V = (1/3) ∫_S (x, y, z) · n dS, which requires DoF-specific local contributions. This is NOT YET IMPLEMENTED in the unified interface.
 
 **Implementation**:
 1. **Kernel**: `compute_intersection_volume_gradient_kernel`
@@ -1072,19 +1042,22 @@ auto matrix_result_simple = compute_intersection_volume_matrix_cuda(
 // ============================================================================
 // Self-Volume
 // ============================================================================
+// NOTE: Self-volume unified interface is NOT YET IMPLEMENTED. Self-volume should
+// be computed using the divergence theorem: V = (1/3) ∫_S (x, y, z) · n dS,
+// where S is the boundary surface and n is the outward normal. This requires
+// DoF-specific implementations of local contributions (area weight × n · position)
+// for each element. The base class DoFParameterization has placeholder methods:
+//   - compute_divergence_contribution(): Returns vector of local contributions
+//   - compute_divergence_contribution_gradient(): Returns matrix (num_elements × num_dofs)
+//   - compute_divergence_contribution_hessian(): Returns vector of matrices (one per element)
+// These will be implemented in a future phase after the math is worked out.
+//
+// For now, use the existing compute_volume_cuda() in compute_volume.hpp/.cu which
+// uses divergence theorem but still relies on apply() (which will be removed).
+// The unified self-volume interface will be added once the DoF-specific local
+// contribution methods are implemented.
 
-// Self-volume with DoF (returns VolumeResult with gradient/Hessian support)
-auto self_vol_result = compute_volume_unified_cuda(
-  ref_geom1,
-  affine_dof,
-  dofs1,
-  kgrid,
-  ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT
-);
-std::cout << "Self-volume: " << self_vol_result.volume << std::endl;
-std::cout << "Gradient w.r.t. DoFs: " << self_vol_result.grad.transpose() << std::endl;
-
-// Self-volume without DoF (convenience wrapper)
+// Current approach (uses apply(), will be removed):
 double self_vol_simple = compute_volume_cuda(ref_geom1, kgrid);
 ```
 
