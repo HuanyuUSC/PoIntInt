@@ -2,6 +2,9 @@
 #include "element_functions.hpp"
 #include <cmath>
 #include <complex>
+#include <tbb/parallel_reduce.h>
+#include <tbb/blocked_range.h>
+#include <functional>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -91,17 +94,44 @@ std::complex<double> compute_A_geometry(
   std::complex<double> A_total(0.0, 0.0);
   
   if (geom.type == GEOM_TRIANGLE) {
-    for (const auto& tri : geom.tris) {
-      A_total += compute_A_triangle(tri, k);
-    }
+    A_total = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.tris.size()),
+      std::complex<double>(0.0, 0.0),
+      [&](const tbb::blocked_range<size_t>& r, std::complex<double> local_sum) -> std::complex<double> {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          local_sum += compute_A_triangle(geom.tris[i], k);
+        }
+        return local_sum;
+      },
+      [](const std::complex<double>& a, const std::complex<double>& b) -> std::complex<double> {
+        return a + b;
+      });
   } else if (geom.type == GEOM_DISK) {
-    for (const auto& disk : geom.disks) {
-      A_total += compute_A_disk(disk, k);
-    }
+    A_total = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.disks.size()),
+      std::complex<double>(0.0, 0.0),
+      [&](const tbb::blocked_range<size_t>& r, std::complex<double> local_sum) -> std::complex<double> {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          local_sum += compute_A_disk(geom.disks[i], k);
+        }
+        return local_sum;
+      },
+      [](const std::complex<double>& a, const std::complex<double>& b) -> std::complex<double> {
+        return a + b;
+      });
   } else if (geom.type == GEOM_GAUSSIAN) {
-    for (const auto& gauss : geom.gaussians) {
-      A_total += compute_A_gaussian(gauss, k);
-    }
+    A_total = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.gaussians.size()),
+      std::complex<double>(0.0, 0.0),
+      [&](const tbb::blocked_range<size_t>& r, std::complex<double> local_sum) -> std::complex<double> {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          local_sum += compute_A_gaussian(geom.gaussians[i], k);
+        }
+        return local_sum;
+      },
+      [](const std::complex<double>& a, const std::complex<double>& b) -> std::complex<double> {
+        return a + b;
+      });
   }
   
   return A_total;
