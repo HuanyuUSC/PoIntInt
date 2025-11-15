@@ -2,7 +2,11 @@
 
 ## Overview
 
-This guide shows how to use the new extensible CUDA gradient computation system. The system uses a registry pattern to allow different DoF types to provide their own CUDA kernels without modifying the core gradient computation code.
+This guide shows how to use and extend the extensible CUDA gradient computation system. The system uses a registry pattern to allow different DoF types to provide their own CUDA kernels without modifying the core gradient computation code.
+
+**Related Documents:**
+- **[DESIGN_PROPOSAL.md](DESIGN_PROPOSAL.md)**: High-level architecture and design
+- **[DESIGN_EXTENSIBLE_GRADIENT.md](DESIGN_EXTENSIBLE_GRADIENT.md)**: Detailed design of the extensible gradient system
 
 ## Step 1: Register CUDA Kernels at Startup
 
@@ -150,15 +154,18 @@ IntersectionVolumeGradientResult compute_intersection_volume_gradient_cuda(...) 
 
 ## Current Status
 
-- ✅ Registry system implemented
-- ✅ AffineDoF CUDA wrappers created
-- ⏳ Main gradient function needs refactoring to use registry
-- ⏳ Need to register kernels at startup in tests/main
+- ✅ Registry system implemented (`dof/cuda/dof_cuda_interface.hpp/cpp`)
+- ✅ AffineDoF CUDA wrappers created (`dof/cuda/affine_dof_cuda.cu`)
+- ✅ Automatic kernel registration via static initializers
+- ✅ Main gradient function uses registry (`compute_intersection_volume_gradient_cuda`)
+- ✅ Support for AffineDoF with triangles, disks, and Gaussians
+- ✅ CPU fallback for unsupported combinations
+- ✅ Shared CUDA helpers (`cuda/cuda_helpers.hpp`)
 
 ## Next Steps
 
-1. Refactor `compute_intersection_volume_gradient_cuda` to use the registry
-2. Add kernel registration calls in test initialization
-3. Test with AffineDoF to ensure backward compatibility
-4. Add TriangleMeshDoF CUDA support as an example
+1. ⏳ Add TriangleMeshDoF CUDA support as an example
+2. ⏳ Refactor to unified interface (remove `apply()`)
+3. ⏳ Add Hessian computation support
+4. ⏳ Add self-volume gradient computation
 

@@ -1,5 +1,11 @@
 # Design Proposal: Extensible Multi-Object Intersection Volume with Gradients
 
+## Document Structure
+
+This document provides the high-level design and architecture for the poIntInt library. For implementation details and practical guides, see:
+- **[IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md)**: Step-by-step guide for implementing and extending the CUDA gradient system
+- **[DESIGN_EXTENSIBLE_GRADIENT.md](DESIGN_EXTENSIBLE_GRADIENT.md)**: Detailed design of the extensible CUDA gradient computation system (now integrated into this document)
+
 ## Overview
 
 This document proposes a design to extend the current two-object intersection volume computation to support:
@@ -103,8 +109,11 @@ struct DoFParameterization {
     compute_A_gradient(const Geometry& ref_geom, const Eigen::Vector3d& k, 
                       const Eigen::VectorXd& dofs) const = 0;
   
-  // Optional: Compute Hessian (Gauss-Newton approximation) of A(k) w.r.t. DoFs
+  // Optional: Compute full Hessian (second derivatives) of A(k) w.r.t. DoFs
   // Returns: d²A/dθ² (complex matrix of size num_dofs × num_dofs)
+  // Note: This is NOT required for Gauss-Newton approximation of volume Hessian,
+  // which uses only first derivatives: H ≈ Σ_q w_q · (∂A₁/∂θ₁) · (∂A₂/∂θ₂)^T
+  // This method is provided for future improvements (e.g., full Newton optimization)
   // Default implementation returns zero matrix
   virtual Eigen::MatrixXcd 
     compute_A_hessian(const Geometry& ref_geom, const Eigen::Vector3d& k,
@@ -130,7 +139,7 @@ struct AffineDoF : public DoFParameterization {
     compute_A_gradient(const Geometry& ref_geom, const Eigen::Vector3d& k,
                       const Eigen::VectorXd& dofs) const override;
   
-  // Optional: Hessian computation for second-order optimization
+  // Optional: Full Hessian computation (for future improvements, not required for Gauss-Newton)
   Eigen::MatrixXcd 
     compute_A_hessian(const Geometry& ref_geom, const Eigen::Vector3d& k,
                      const Eigen::VectorXd& dofs) const override;
@@ -156,22 +165,29 @@ enum class ComputationFlags {
   ALL = VOLUME_ONLY | GRADIENT | HESSIAN
 };
 
-// Result structure for unified computation
-struct IntersectionVolumeResult {
-  double volume;  // Intersection volume
+// Result structure for unified computation (used for both intersection and self-volume)
+struct VolumeResult {
+  double volume;  // Volume (intersection volume or self-volume)
   
   // Gradients (only computed if requested)
-  Eigen::VectorXd grad_geom1;  // Gradient w.r.t. DoFs of geometry 1
-  Eigen::VectorXd grad_geom2;  // Gradient w.r.t. DoFs of geometry 2
+  Eigen::VectorXd grad_geom1;  // Gradient w.r.t. DoFs of geometry 1 (or single geometry for self-volume)
+  Eigen::VectorXd grad_geom2;  // Gradient w.r.t. DoFs of geometry 2 (empty for self-volume)
   
   // Hessians (only computed if requested, Gauss-Newton approximation)
-  Eigen::MatrixXd hessian_geom1;  // Hessian w.r.t. DoFs of geometry 1
-  Eigen::MatrixXd hessian_geom2;  // Hessian w.r.t. DoFs of geometry 2
-  Eigen::MatrixXd hessian_cross;  // Cross-term Hessian (∂²V/∂θ₁∂θ₂)
+  // Note: Gauss-Newton Hessian is approximated as sum of outer products of gradients:
+  //   H ≈ Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₂(k_q)/∂θ₂)^T
+  // This does NOT require second derivatives d²A/dθ²
+  Eigen::MatrixXd hessian_geom1;  // Hessian w.r.t. DoFs of geometry 1 (or single geometry for self-volume)
+  Eigen::MatrixXd hessian_geom2;  // Hessian w.r.t. DoFs of geometry 2 (empty for self-volume)
+  Eigen::MatrixXd hessian_cross;  // Cross-term Hessian (∂²V/∂θ₁∂θ₂, empty for self-volume)
+  
+  // Optional: Future support for full Hessian (requires d²A/dθ²)
+  // This is left as a placeholder for future improvements
+  // Eigen::MatrixXd hessian_full_geom1;  // Full Hessian if compute_A_hessian() is implemented
 };
 
 // Unified scalar intersection volume interface (with DoF)
-IntersectionVolumeResult compute_intersection_volume_unified_cuda(
+VolumeResult compute_intersection_volume_unified_cuda(
   const Geometry& ref_geom1,  // Reference geometry 1
   const Geometry& ref_geom2,  // Reference geometry 2
   const std::shared_ptr<DoFParameterization>& dof1,  // DoF for geometry 1
@@ -243,12 +259,13 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   bool enable_profiling = false
 );
 
-// Self-volume computation (divergence theorem)
-double compute_volume_unified_cuda(
+// Self-volume computation (divergence theorem) - returns VolumeResult with gradient/Hessian support
+VolumeResult compute_volume_unified_cuda(
   const Geometry& ref_geom,
   const std::shared_ptr<DoFParameterization>& dof,
   const Eigen::VectorXd& dofs,
   const KGrid& kgrid,
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
   int blockSize = 256,
   bool enable_profiling = false
 );
@@ -262,7 +279,7 @@ double compute_volume_cuda(
 );
 
 // CPU/TBB versions (same interface, different suffix)
-IntersectionVolumeResult compute_intersection_volume_unified_cpu(
+VolumeResult compute_intersection_volume_unified_cpu(
   const Geometry& ref_geom1,
   const Geometry& ref_geom2,
   const std::shared_ptr<DoFParameterization>& dof1,
@@ -274,7 +291,14 @@ IntersectionVolumeResult compute_intersection_volume_unified_cpu(
   bool enable_profiling = false
 );
 
-// ... similar for multi-object and self-volume ...
+VolumeResult compute_volume_unified_cpu(
+  const Geometry& ref_geom,
+  const std::shared_ptr<DoFParameterization>& dof,
+  const Eigen::VectorXd& dofs,
+  const KGrid& kgrid,
+  ComputationFlags flags = ComputationFlags::VOLUME_ONLY,
+  bool enable_profiling = false
+);
 ```
 
 ### 4. Kernel Design for Matrix Computation
@@ -358,35 +382,43 @@ struct IntersectionVolumeMatrixResult {
 ## Implementation Status
 
 ### ✅ Phase 1: Matrix-Based Multi-Object Support (COMPLETED)
-1. ✅ Created `Geometry` struct to hold different geometry types
-2. ✅ Implemented `compute_form_factor_matrix_kernel` to compute J matrix
-3. ✅ Implemented `compute_volume_matrix_kernel` to compute V = J^T D J
-4. ✅ Created multi-object interface returning symmetric matrix
+1. ✅ Created `Geometry` struct to hold different geometry types (triangles, disks, Gaussians)
+2. ✅ Implemented `compute_form_factor_matrix_kernel` to compute J matrix (CUDA)
+3. ✅ Implemented `compute_volume_matrix_kernel` to compute V = J^T D J (CUDA)
+4. ✅ Created multi-object interface returning symmetric matrix (CUDA + CPU/TBB)
 5. ✅ Maintained backward compatibility with 2-object scalar version
 6. ✅ Added CPU version with TBB parallelization
 7. ✅ Comprehensive unit tests for multi-object functionality
+8. ✅ All computation uses `double` precision (no `float` types)
 
 ### ✅ Phase 2: Add Gaussian Splat Support (COMPLETED)
-1. ✅ Defined `GaussianPacked` struct
-2. ✅ Implemented Gaussian form factor computation in kernel
+1. ✅ Defined `GaussianPacked` struct with `double` precision
+2. ✅ Implemented Gaussian form factor computation in kernel (CUDA)
 3. ✅ Added to geometry type enum and kernel dispatch
-4. ✅ Added CPU version support
-5. ✅ Unit tests for Gaussian splat intersections
+4. ✅ Added CPU version support with TBB
+5. ✅ Unit tests for Gaussian splat intersections (Gaussian-Gaussian, Gaussian-Mesh, Gaussian-Point Cloud)
 
 ### ✅ Phase 3: DoF Abstraction (COMPLETED)
 1. ✅ Created `DoFParameterization` base class
-2. ✅ Implemented `AffineDoF` with gradient computation (CPU-based)
-3. ✅ Implemented `TriangleMeshDoF` for vertex position DoFs
-4. ✅ Added transformation application logic
-5. ✅ Implemented `compute_volume_gradient` for volume derivatives
-6. ✅ Comprehensive unit tests with finite difference validation
-7. ✅ Analytical gradient formulas for both DoF types
+2. ✅ Implemented `AffineDoF` with gradient computation:
+   - CPU version with TBB parallelization
+   - CUDA version via registry system (triangles, disks, Gaussians)
+3. ✅ Implemented `TriangleMeshDoF` for vertex position DoFs:
+   - CPU version with analytical gradients
+   - Volume gradient computation
+4. ✅ Implemented `compute_volume_gradient` for volume derivatives (CPU)
+5. ✅ Comprehensive unit tests with finite difference validation
+6. ✅ Analytical gradient formulas for both DoF types
+7. ✅ CUDA kernel registry system for extensible gradient computation
+8. ✅ Helper functions for form factor computation (`form_factor_helpers.hpp`)
+9. ✅ Geometry creation helpers (`geometry_helpers.hpp`)
+10. ✅ Analytical intersection volume functions for testing
 
 **Current Limitations:**
-- `compute_A_gradient` is CPU-based and uses TBB parallelization
-- Gradient computation is integrated into CUDA kernels via registry system
-- CUDA-based gradient computation for intersection volumes is implemented
 - **Architectural Issue**: Current implementation uses `apply()` to transform geometries, which is incorrect for disks/Gaussians (they become elliptical). Need to refactor to unified interface.
+- Self-volume gradient computation not yet implemented (only volume, not gradient)
+- Multi-object gradient computation not yet implemented (only volume matrix)
+- Hessian computation not yet implemented
 
 ## Implementation Plan (Remaining)
 
@@ -443,7 +475,9 @@ struct IntersectionVolumeMatrixResult {
 
 **Goal**: Implement efficient CUDA kernels for computing gradients of intersection volumes with respect to geometry DoFs.
 
-#### 4.1: Refactor DoF Gradient Interface for CUDA
+**Status**: ✅ Implemented for scalar intersection volume gradient with CUDA registry system. See [Extensible CUDA Gradient System](#extensible-cuda-gradient-system) section below.
+
+#### 5.1: Refactor DoF Gradient Interface for CUDA
 
 **Problem**: Current `compute_A_gradient` is CPU-based and not suitable for CUDA kernels. Need to design a CUDA-compatible interface.
 
@@ -500,6 +534,12 @@ struct IntersectionVolumeMatrixResult {
 ∂V/∂θ₁ = (1/(8π³)) · Σ_q w_q · Re( (∂A₁(k_q)/∂θ₁) · conj(A₂(k_q)) )
 ∂V/∂θ₂ = (1/(8π³)) · Σ_q w_q · Re( A₁(k_q) · conj(∂A₂(k_q)/∂θ₂) )
 ```
+
+**Gauss-Newton Hessian Approximation**:
+```
+H ≈ (1/(8π³)) · Σ_q w_q · (∂A₁(k_q)/∂θ₁) · (∂A₂(k_q)/∂θ₂)^T
+```
+Note: This approximation uses only first derivatives and does NOT require `d²A/dθ²`.
 
 **Implementation**:
 1. **Kernel**: `compute_intersection_volume_gradient_kernel`
@@ -793,62 +833,104 @@ def similarity_loss(predicted_implicit, target_implicit):
     return 1.0 - jaccard  # Maximize Jaccard = minimize (1 - Jaccard)
 ```
 
-## Updated File Organization
+## Extensible CUDA Gradient System
+
+The gradient computation system uses a registry/dispatch pattern to allow different DoF types to provide their own CUDA kernels without modifying the core gradient computation code. This design is detailed in a separate section for modularity.
+
+**Key Components:**
+1. **CUDA Kernel Registry**: Maps (DoF type, Geometry type) → CUDA kernel functions
+2. **DoF CUDA Interface**: Optional interface for DoF classes to provide CUDA kernels
+3. **Hybrid Computation**: Use CUDA when available, fall back to CPU otherwise
+4. **Modular Kernel Organization**: Each DoF type provides its own CUDA kernels
+
+**Current Support:**
+- ✅ `AffineDoF` with triangles (CUDA kernels)
+- ✅ `AffineDoF` with disks (CUDA kernels)
+- ✅ `AffineDoF` with Gaussians (CUDA kernels)
+- ✅ Automatic kernel registration via static initializers
+- ✅ CPU fallback for unsupported combinations
+
+**Implementation Details:**
+- Registry system: `include/dof/cuda/dof_cuda_interface.hpp`
+- AffineDoF CUDA kernels: `src/dof/cuda/affine_dof_cuda.cu`
+- Shared CUDA helpers: `include/cuda/cuda_helpers.hpp`
+- Main gradient function uses registry to dispatch to appropriate kernels
+
+For detailed implementation guide, see [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md).
+
+## File Organization
 
 ```
 include/
   geometry/
-    types.hpp
-    geometry.hpp
-    packing.hpp
-    geometry_helpers.hpp
+    types.hpp                    # Geometry type enum, packed structures (double precision)
+    geometry.hpp                 # Geometry struct, factory functions
+    packing.hpp                  # Packing functions (Eigen → CUDA structures)
+    geometry_helpers.hpp         # Geometry creation helpers (unit cube, sphere, etc.)
   dof/
-    dof_parameterization.hpp
-    affine_dof.hpp
-    triangle_mesh_dof.hpp
-    reduced_order_dof.hpp          # NEW
+    dof_parameterization.hpp    # Base DoF interface
+    affine_dof.hpp              # AffineDoF class
+    triangle_mesh_dof.hpp        # TriangleMeshDoF class
+    cuda/
+      dof_cuda_interface.hpp    # CUDA kernel registry interface
+      affine_dof_cuda.hpp        # AffineDoF CUDA kernel declarations
+    reduced_order_dof.hpp        # FUTURE: Reduced order model DoF
   quadrature/
-    kgrid.hpp
-    lebedev_io.hpp
-    gauss_legendre.hpp
+    kgrid.hpp                    # KGrid structure and build_kgrid
+    lebedev_io.hpp               # Lebedev quadrature I/O
+    gauss_legendre.hpp           # Gauss-Legendre quadrature
+  cuda/
+    cuda_helpers.hpp             # Shared CUDA device functions (matrix ops, element functions)
   compute_intersection_volume.hpp
   compute_intersection_volume_multi_object.hpp
-  compute_intersection_volume_gradient.hpp        # NEW
+  compute_intersection_volume_gradient.hpp
+  compute_volume.hpp             # Self-volume computation
+  form_factor_helpers.hpp        # Form factor computation helpers, exact formulas
+  analytical_intersection.hpp    # Analytical intersection volume functions
   applications/
-    geometry_alignment.hpp                         # NEW
-    body_dynamics.hpp                              # NEW
-  form_factor_helpers.hpp
-  analytical_intersection.hpp
+    geometry_alignment.hpp       # FUTURE: Geometry alignment application
+    body_dynamics.hpp            # FUTURE: Body dynamics integration
 
 src/
   geometry/
-    packing.cpp
-    geometry_helpers.cpp
+    packing.cpp                  # Packing implementations (TBB parallelized)
+    geometry_helpers.cpp         # Geometry creation implementations (TBB parallelized)
   dof/
-    affine_dof.cpp
-    triangle_mesh_dof.cpp
-    reduced_order_dof.cpp                          # NEW
-  compute_intersection_volume.cu
-  compute_intersection_volume_multi_object.cu
-  compute_intersection_volume_gradient.cu          # NEW
+    affine_dof.cpp               # AffineDoF CPU implementation (TBB parallelized)
+    triangle_mesh_dof.cpp        # TriangleMeshDoF CPU implementation
+    cuda/
+      dof_cuda_interface.cpp    # CUDA kernel registry implementation
+      affine_dof_cuda.cu        # AffineDoF CUDA kernels and wrappers
+    reduced_order_dof.cpp        # FUTURE: Reduced order model DoF
+  compute_intersection_volume.cu              # Scalar intersection volume (CUDA + CPU/TBB)
+  compute_intersection_volume_multi_object.cu # Multi-object intersection volume (CUDA + CPU/TBB)
+  compute_intersection_volume_gradient.cu     # Intersection volume gradient (CUDA)
+  compute_intersection_volume_gradient_cpu.cpp # Intersection volume gradient (CPU/TBB)
+  compute_volume.cu                           # Self-volume computation (CUDA + CPU/TBB)
+  form_factor_helpers.cpp                     # Form factor helpers (TBB parallelized)
+  analytical_intersection.cpp                 # Analytical intersection functions
   applications/
-    geometry_alignment.cpp                         # NEW
-    body_dynamics.cpp                              # NEW
-  form_factor_helpers.cpp
-  analytical_intersection.cpp
+    geometry_alignment.cpp                    # FUTURE: Geometry alignment
+    body_dynamics.cpp                         # FUTURE: Body dynamics
 
 python/
   poIntInt/
-    __init__.py
-    bindings.cpp                                   # pybind11 bindings
-    setup.py
+    __init__.py                  # FUTURE: Python package
+    bindings.cpp                 # FUTURE: pybind11 bindings
+    setup.py                     # FUTURE: Package setup
 
 test/
-  test_*.cpp                                       # Existing tests
-  test_gradient_cuda.cpp                            # NEW
-  test_alignment.cpp                               # NEW
-  test_reduced_order.cpp                           # NEW
+  test_unit_cube.cpp             # Triangle mesh unit tests
+  test_sphere_pointcloud.cpp     # Point cloud unit tests
+  test_gaussian_splats.cpp       # Gaussian splat unit tests
+  test_multi_object.cpp          # Multi-object unit tests
+  test_dof_parameterization.cpp  # DoF parameterization unit tests
+  test_intersection_volume_gradient.cpp  # Gradient computation unit tests
+  test_alignment.cpp             # FUTURE: Alignment application tests
+  test_reduced_order.cpp         # FUTURE: Reduced order model tests
 ```
+
+**Note**: All CUDA and CPU code uses `double` precision throughout. No `float` types are used in computation.
 
 ## Timeline and Priorities
 
@@ -913,7 +995,8 @@ auto result_with_grad = compute_intersection_volume_unified_cuda(
 std::cout << "Volume: " << result_with_grad.volume << std::endl;
 std::cout << "Gradient w.r.t. geom1: " << result_with_grad.grad_geom1.transpose() << std::endl;
 
-// Compute volume + gradient + Hessian (for second-order optimization)
+// Compute volume + gradient + Hessian (Gauss-Newton approximation)
+// Note: Hessian uses only first derivatives: H ≈ Σ_q w_q · (∂A₁/∂θ₁) · (∂A₂/∂θ₂)^T
 auto result_full = compute_intersection_volume_unified_cuda(
   ref_geom1, ref_geom2,
   affine_dof, affine_dof,
@@ -954,15 +1037,18 @@ auto matrix_result_simple = compute_intersection_volume_matrix_cuda(
 // Self-Volume
 // ============================================================================
 
-// Self-volume with DoF
-double self_vol = compute_volume_unified_cuda(
+// Self-volume with DoF (returns VolumeResult with gradient/Hessian support)
+auto self_vol_result = compute_volume_unified_cuda(
   ref_geom1,
   affine_dof,
   dofs1,
-  kgrid
+  kgrid,
+  ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT
 );
+std::cout << "Self-volume: " << self_vol_result.volume << std::endl;
+std::cout << "Gradient w.r.t. DoFs: " << self_vol_result.grad_geom1.transpose() << std::endl;
 
-// Self-volume without DoF
+// Self-volume without DoF (convenience wrapper)
 double self_vol_simple = compute_volume_cuda(ref_geom1, kgrid);
 ```
 

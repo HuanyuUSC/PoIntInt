@@ -1,5 +1,7 @@
 # Extensible CUDA Gradient Computation Design
 
+**Note**: This document provides detailed design information about the extensible CUDA gradient system. The high-level architecture is described in [DESIGN_PROPOSAL.md](DESIGN_PROPOSAL.md). For implementation steps, see [IMPLEMENTATION_GUIDE.md](IMPLEMENTATION_GUIDE.md).
+
 ## Problem Statement
 
 Currently, `compute_intersection_volume_gradient_cuda` only supports:
