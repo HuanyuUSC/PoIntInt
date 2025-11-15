@@ -9,7 +9,7 @@ This guide shows how to use the new extensible CUDA gradient computation system.
 In your main application or test initialization, register the CUDA kernels:
 
 ```cpp
-#include "dof/affine_dof_cuda.hpp"
+#include "dof/cuda/affine_dof_cuda.hpp"
 
 int main() {
   // Register AffineDoF CUDA kernels
@@ -25,7 +25,7 @@ The main gradient function will automatically check the registry and use CUDA ke
 
 ```cpp
 #include "compute_intersection_volume_gradient.hpp"
-#include "dof/dof_cuda_interface.hpp"
+#include "dof/cuda/dof_cuda_interface.hpp"
 
 PoIntInt::IntersectionVolumeGradientResult result = 
   PoIntInt::compute_intersection_volume_gradient_cuda(
@@ -53,11 +53,11 @@ __global__ void compute_A_gradient_triangle_mesh_kernel(...) {
 
 ### 3.2 Create Wrapper Functions
 
-In `src/dof/triangle_mesh_dof_cuda.cpp`:
+In `src/dof/cuda/triangle_mesh_dof_cuda.cpp`:
 
 ```cpp
-#include "dof/triangle_mesh_dof_cuda.hpp"
-#include "dof/dof_cuda_interface.hpp"
+#include "dof/cuda/triangle_mesh_dof_cuda.hpp"
+#include "dof/cuda/dof_cuda_interface.hpp"
 
 namespace PoIntInt {
 
@@ -99,7 +99,7 @@ void register_triangle_mesh_dof_cuda_kernels() {
 ### 3.3 Register at Startup
 
 ```cpp
-#include "dof/triangle_mesh_dof_cuda.hpp"
+#include "dof/cuda/triangle_mesh_dof_cuda.hpp"
 
 int main() {
   PoIntInt::register_triangle_mesh_dof_cuda_kernels();

@@ -163,16 +163,18 @@ void register_triangle_mesh_dof_cuda_kernels() {
 ```
 include/dof/
   - dof_parameterization.hpp (existing)
-  - dof_cuda_interface.hpp (new - registry interface)
   - affine_dof.hpp (existing)
-  - affine_dof_cuda.hpp (new - CUDA wrappers for AffineDoF)
   - triangle_mesh_dof.hpp (existing)
-  - triangle_mesh_dof_cuda.hpp (new - CUDA wrappers for TriangleMeshDoF)
+  - cuda/
+    - dof_cuda_interface.hpp (new - registry interface)
+    - affine_dof_cuda.hpp (new - CUDA wrappers for AffineDoF)
+    - triangle_mesh_dof_cuda.hpp (new - CUDA wrappers for TriangleMeshDoF)
 
 src/dof/
-  - dof_cuda_interface.cpp (new - registry implementation)
-  - affine_dof_cuda.cpp (new - wrapper implementations)
-  - triangle_mesh_dof_cuda.cpp (new - wrapper implementations)
+  - cuda/
+    - dof_cuda_interface.cpp (new - registry implementation)
+    - affine_dof_cuda.cpp (new - wrapper implementations)
+    - triangle_mesh_dof_cuda.cpp (new - wrapper implementations)
 
 src/
   - compute_intersection_volume_gradient.cu (refactored to use registry)
