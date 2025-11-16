@@ -164,18 +164,20 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# libigl (header-only core)
+# libigl (header-only core, with OpenGL/GLFW for visualization)
 # ---------------------------------------------------------------------------
 if(FETCH_LIBIGL)
-  message(STATUS "Fetching libigl (core)...")
+  message(STATUS "Fetching libigl (core with OpenGL/GLFW)...")
   FetchContent_Declare(
     libigl
     GIT_REPOSITORY https://github.com/libigl/libigl.git
     GIT_TAG v2.5.0
   )
   set(LIBIGL_USE_STATIC_LIBRARY OFF CACHE BOOL "" FORCE)
-  set(LIBIGL_WITH_OPENGL OFF CACHE BOOL "" FORCE)
-  set(LIBIGL_WITH_OPENGL_GLFW OFF CACHE BOOL "" FORCE)
+  # Enable OpenGL/GLFW/ImGui for visualization support (header-only, doesn't affect other targets)
+  set(LIBIGL_WITH_OPENGL ON CACHE BOOL "" FORCE)
+  set(LIBIGL_WITH_OPENGL_GLFW ON CACHE BOOL "" FORCE)
+  set(LIBIGL_IMGUI ON CACHE BOOL "" FORCE)  # Enable ImGui module
   set(LIBIGL_WITH_TUTORIAL OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(libigl)
 else()
@@ -233,7 +235,7 @@ else()
   target_compile_options(poIntInt_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# ---- Example executable (optional) ----
+# ---- Example executables (optional) ----
 if(BUILD_EXE)
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp")
     add_executable(poIntInt_app app/main.cpp)
@@ -245,6 +247,37 @@ if(BUILD_EXE)
       FOLDER "app"
     )
     copy_tbb_dlls(poIntInt_app)
+  endif()
+  
+  # Visualization demo (requires libigl viewer with OpenGL/GLFW)
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/visualize_gradient.cpp")
+    add_executable(poIntInt_visualize app/visualize_gradient.cpp)
+    target_link_libraries(poIntInt_visualize PRIVATE poIntInt_core)
+    
+    # Define source directory for finding data files
+    # Convert Windows backslashes to forward slashes for the preprocessor string
+    string(REPLACE "\\" "/" POINTINT_SOURCE_DIR_NORMALIZED "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(poIntInt_visualize PRIVATE 
+      POINTINT_SOURCE_DIR="${POINTINT_SOURCE_DIR_NORMALIZED}"
+    )
+    
+    # Link against libigl viewer components (if available)
+    # Note: igl::glfw should automatically pull in igl::opengl and glad::glad
+    if(TARGET igl::glfw)
+      target_link_libraries(poIntInt_visualize PRIVATE igl::glfw)
+    endif()
+    if(TARGET igl::imgui)
+      # Use PUBLIC linking to ensure include directories are propagated
+      target_link_libraries(poIntInt_visualize PUBLIC igl::imgui)
+    endif()
+    
+    set_target_properties(poIntInt_visualize PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+      FOLDER "app"
+    )
+    copy_tbb_dlls(poIntInt_visualize)
   endif()
 endif()
 
