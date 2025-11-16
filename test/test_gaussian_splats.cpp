@@ -338,7 +338,7 @@ bool test_volume_divergence_theorem(const std::string& leb_file, int Nrad = 96) 
   auto geom = make_gaussian_splat(P, N, sigmas, weights);
   
   // Compute volume using divergence theorem
-  double volume_div = compute_volume_cuda(geom, 256, true);
+  double volume_div = compute_volume_cpu(geom);
   
   // Compute F(0) - for a sphere, F(0) = (4π/3) * R³
   double R = 1.0;  // Unit sphere

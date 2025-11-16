@@ -6,6 +6,7 @@
 #include "quadrature/gauss_legendre.hpp"
 #include "quadrature/kgrid.hpp"
 #include "compute_intersection_volume.hpp"
+#include "compute_volume.hpp"
 #include "geometry/packing.hpp"
 #include <cmath>
 #include <corecrt_math_defines.h>
@@ -13,19 +14,6 @@
 #include <chrono>
 
 using namespace PoIntInt;
-
-double volume(const Eigen::MatrixXd& V, const Eigen::MatrixXi& F)
-{
-  double vol = 0.0;
-  for (int i = 0; i < F.rows(); i++)
-  {
-    Eigen::Vector3d v0 = V.row(F(i, 0));
-    Eigen::Vector3d v1 = V.row(F(i, 1));
-    Eigen::Vector3d v2 = V.row(F(i, 2));
-    vol += v0.dot(v1.cross(v2)) / 6.0;
-  }
-  return fabs(vol);
-}
 
 double Ak_squared_norm(double r)
 {
@@ -99,7 +87,7 @@ int main(int argc, char** argv) {
   double Vself = compute_intersection_volume_cuda(geom1, geom1, KG, 256, true);
   auto t_end = std::chrono::high_resolution_clock::now();
   auto compute_volume_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count() / 1000.0;
-  double Vgt = volume(V, F);
+  double Vgt = compute_volume_cpu(geom1, true);
   printf("Computed volume: %g, ground truth: %g, rel err: %g%%\n", Vself, Vgt, abs(Vself - Vgt) / Vgt * 100.0);
   printf("Time used: %g[ms]\n", compute_volume_time);
   return 0;

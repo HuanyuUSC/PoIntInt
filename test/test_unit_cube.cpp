@@ -189,8 +189,8 @@ bool test_volume_divergence_theorem(const std::string& leb_file, int Nrad = 96) 
   create_unit_cube_mesh(V, F);
   auto geom = make_triangle_mesh(V, F);
   
-  // Compute volume using divergence theorem
-  double volume_div = compute_volume_cuda(geom, 256, true);
+  // Compute volume using divergence theorem (unified interface with identity AffineDoF)
+  double volume_div = compute_volume_cpu(geom);
   
   // Compute F(0) - form factor at k=0 should equal volume
   // F(0) = ∫_Ω dx = V
