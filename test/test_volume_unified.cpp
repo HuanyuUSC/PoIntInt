@@ -12,7 +12,6 @@
 #include "geometry/packing.hpp"
 #include "geometry/geometry_helpers.hpp"
 #include "geometry/geometry.hpp"
-#include "compute_volume_unified.hpp"
 #include "compute_intersection_volume.hpp"
 #include "compute_volume.hpp"
 #include "quadrature/lebedev_io.hpp"
@@ -31,9 +30,9 @@ std::string get_default_lebedev_path() {
       source_dir[i] = '/';
     }
   }
-  return source_dir + "/data/lebedev/lebedev_029.txt";
+  return source_dir + "/data/lebedev/lebedev_009.txt";
 #else
-  return "data/lebedev/lebedev_029.txt";
+  return "data/lebedev/lebedev_009.txt";
 #endif
 }
 
@@ -145,10 +144,10 @@ std::pair<Eigen::VectorXd, Eigen::VectorXd> compute_intersection_volume_gradient
     dofs1_m1(i) -= eps;
     dofs1_m2(i) -= 2.0 * eps;
     
-    double vol_p2 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_p2, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
-    double vol_p1 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_p1, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
-    double vol_m1 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_m1, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
-    double vol_m2 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_m2, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_p2 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_p2, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_p1 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_p1, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_m1 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_m1, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_m2 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1_m2, dofs2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
     
     grad1(i) = (-vol_p2 + 8.0 * vol_p1 - 8.0 * vol_m1 + vol_m2) / (12.0 * eps);
   }
@@ -165,10 +164,10 @@ std::pair<Eigen::VectorXd, Eigen::VectorXd> compute_intersection_volume_gradient
     dofs2_m1(i) -= eps;
     dofs2_m2(i) -= 2.0 * eps;
     
-    double vol_p2 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_p2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
-    double vol_p1 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_p1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
-    double vol_m1 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_m1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
-    double vol_m2 = compute_intersection_volume_unified_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_m2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_p2 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_p2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_p1 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_p1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_m1 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_m1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_m2 = compute_intersection_volume_cuda(ref_geom1, ref_geom2, dof1, dof2, dofs1, dofs2_m2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
     
     grad2(i) = (-vol_p2 + 8.0 * vol_p1 - 8.0 * vol_m1 + vol_m2) / (12.0 * eps);
   }
@@ -217,11 +216,11 @@ bool test_intersection_volume_flags_triangles(const std::string& leb_file) {
   
   // Test different flags
   std::cout << "  Testing VOLUME_ONLY..." << std::endl;
-  auto result_vol = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
+  auto result_vol = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
   std::cout << "    Volume: " << std::setprecision(10) << result_vol.volume << std::endl;
   
   std::cout << "  Testing VOLUME_ONLY | GRADIENT..." << std::endl;
-  auto result_grad = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_grad = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     static_cast<ComputationFlags>(static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT)), 
     256, false);
   std::cout << "    Volume: " << result_grad.volume << std::endl;
@@ -229,7 +228,7 @@ bool test_intersection_volume_flags_triangles(const std::string& leb_file) {
   std::cout << "    Gradient 2 norm: " << result_grad.grad_geom2.norm() << std::endl;
   
   std::cout << "  Testing ALL (VOLUME | GRADIENT | HESSIAN)..." << std::endl;
-  auto result_all = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::ALL, 256, false);
+  auto result_all = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::ALL, 256, false);
   std::cout << "    Volume: " << result_all.volume << std::endl;
   std::cout << "    Gradient 1 norm: " << result_all.grad_geom1.norm() << std::endl;
   std::cout << "    Gradient 2 norm: " << result_all.grad_geom2.norm() << std::endl;
@@ -288,12 +287,12 @@ bool test_intersection_volume_triangles_comprehensive(const std::string& leb_fil
   // Test VOLUME_ONLY
   std::cout << "    Testing VOLUME_ONLY..." << std::endl;
   auto t_cpu_start = std::chrono::high_resolution_clock::now();
-  auto result_cpu = compute_intersection_volume_unified_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false);
+  auto result_cpu = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false);
   auto t_cpu_end = std::chrono::high_resolution_clock::now();
   double cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
   
   auto t_gpu_start = std::chrono::high_resolution_clock::now();
-  auto result_gpu = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
+  auto result_gpu = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
   auto t_gpu_end = std::chrono::high_resolution_clock::now();
   double gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
   
@@ -311,13 +310,13 @@ bool test_intersection_volume_triangles_comprehensive(const std::string& leb_fil
   // Test GRADIENT
   std::cout << "    Testing GRADIENT..." << std::endl;
   t_cpu_start = std::chrono::high_resolution_clock::now();
-  auto result_cpu_grad = compute_intersection_volume_unified_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_cpu_grad = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     static_cast<ComputationFlags>(static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT)), false);
   t_cpu_end = std::chrono::high_resolution_clock::now();
   cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
   
   t_gpu_start = std::chrono::high_resolution_clock::now();
-  auto result_gpu_grad = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_gpu_grad = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     static_cast<ComputationFlags>(static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT)), 256, false);
   t_gpu_end = std::chrono::high_resolution_clock::now();
   gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
@@ -338,7 +337,7 @@ bool test_intersection_volume_triangles_comprehensive(const std::string& leb_fil
   std::cout << "  Part 2: GPU vs Finite Differencing..." << std::endl;
   
   // First, check that volume computation is consistent
-  auto result_vol_only = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_vol_only = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     ComputationFlags::VOLUME_ONLY, 256, false);
   
   // Check volume consistency
@@ -445,12 +444,12 @@ bool test_intersection_volume_disks(const std::string& leb_file) {
   // Test VOLUME_ONLY
   std::cout << "    Testing VOLUME_ONLY..." << std::endl;
   auto t_cpu_start = std::chrono::high_resolution_clock::now();
-  auto result_cpu = compute_intersection_volume_unified_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false);
+  auto result_cpu = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false);
   auto t_cpu_end = std::chrono::high_resolution_clock::now();
   double cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
   
   auto t_gpu_start = std::chrono::high_resolution_clock::now();
-  auto result_gpu = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
+  auto result_gpu = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
   auto t_gpu_end = std::chrono::high_resolution_clock::now();
   double gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
   
@@ -468,13 +467,13 @@ bool test_intersection_volume_disks(const std::string& leb_file) {
   // Test GRADIENT
   std::cout << "    Testing GRADIENT..." << std::endl;
   t_cpu_start = std::chrono::high_resolution_clock::now();
-  auto result_cpu_grad = compute_intersection_volume_unified_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_cpu_grad = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     static_cast<ComputationFlags>(static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT)), false);
   t_cpu_end = std::chrono::high_resolution_clock::now();
   cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
   
   t_gpu_start = std::chrono::high_resolution_clock::now();
-  auto result_gpu_grad = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_gpu_grad = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     static_cast<ComputationFlags>(static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT)), 256, false);
   t_gpu_end = std::chrono::high_resolution_clock::now();
   gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
@@ -495,7 +494,7 @@ bool test_intersection_volume_disks(const std::string& leb_file) {
   std::cout << "  Part 2: GPU vs Finite Differencing..." << std::endl;
   
   // First, check that volume computation is consistent
-  auto result_vol_only = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_vol_only = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     ComputationFlags::VOLUME_ONLY, 256, false);
   
   // Check volume consistency
@@ -604,12 +603,12 @@ bool test_intersection_volume_gaussians(const std::string& leb_file) {
   // Test VOLUME_ONLY
   std::cout << "    Testing VOLUME_ONLY..." << std::endl;
   auto t_cpu_start = std::chrono::high_resolution_clock::now();
-  auto result_cpu = compute_intersection_volume_unified_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false);
+  auto result_cpu = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false);
   auto t_cpu_end = std::chrono::high_resolution_clock::now();
   double cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
   
   auto t_gpu_start = std::chrono::high_resolution_clock::now();
-  auto result_gpu = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
+  auto result_gpu = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false);
   auto t_gpu_end = std::chrono::high_resolution_clock::now();
   double gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
   
@@ -627,13 +626,13 @@ bool test_intersection_volume_gaussians(const std::string& leb_file) {
   // Test GRADIENT
   std::cout << "    Testing GRADIENT..." << std::endl;
   t_cpu_start = std::chrono::high_resolution_clock::now();
-  auto result_cpu_grad = compute_intersection_volume_unified_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_cpu_grad = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     static_cast<ComputationFlags>(static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT)), false);
   t_cpu_end = std::chrono::high_resolution_clock::now();
   cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
   
   t_gpu_start = std::chrono::high_resolution_clock::now();
-  auto result_gpu_grad = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_gpu_grad = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     static_cast<ComputationFlags>(static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT)), 256, false);
   t_gpu_end = std::chrono::high_resolution_clock::now();
   gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
@@ -654,7 +653,7 @@ bool test_intersection_volume_gaussians(const std::string& leb_file) {
   std::cout << "  Part 2: GPU vs Finite Differencing..." << std::endl;
   
   // First, check that volume computation is consistent
-  auto result_vol_only = compute_intersection_volume_unified_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+  auto result_vol_only = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
     ComputationFlags::VOLUME_ONLY, 256, false);
   
   // Check volume consistency

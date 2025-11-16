@@ -13,7 +13,7 @@
 #include "geometry/geometry_helpers.hpp"
 #include "geometry/geometry.hpp"
 #include "compute_intersection_volume.hpp"
-#include "compute_intersection_volume_gradient.hpp"
+#include "computation_flags.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/kgrid.hpp"
 #include "form_factor_helpers.hpp"
@@ -92,23 +92,12 @@ Eigen::VectorXd compute_intersection_volume_gradient_finite_diff(
       dofs2_m2(i) -= 2.0 * eps;
     }
     
-    // Compute volumes at perturbed DoFs
-    // Always apply to the ORIGINAL geometries, not the base transformed ones
-    Geometry geom1_p2 = dof1->apply(geom1, dofs1_p2);
-    Geometry geom2_p2 = dof2->apply(geom2, dofs2_p2);
-    double vol_p2 = compute_intersection_volume_cuda(geom1_p2, geom2_p2, kgrid, 256, false);
-    
-    Geometry geom1_p1 = dof1->apply(geom1, dofs1_p1);
-    Geometry geom2_p1 = dof2->apply(geom2, dofs2_p1);
-    double vol_p1 = compute_intersection_volume_cuda(geom1_p1, geom2_p1, kgrid, 256, false);
-    
-    Geometry geom1_m1 = dof1->apply(geom1, dofs1_m1);
-    Geometry geom2_m1 = dof2->apply(geom2, dofs2_m1);
-    double vol_m1 = compute_intersection_volume_cuda(geom1_m1, geom2_m1, kgrid, 256, false);
-    
-    Geometry geom1_m2 = dof1->apply(geom1, dofs1_m2);
-    Geometry geom2_m2 = dof2->apply(geom2, dofs2_m2);
-    double vol_m2 = compute_intersection_volume_cuda(geom1_m2, geom2_m2, kgrid, 256, false);
+    // Compute volumes at perturbed DoFs using unified interface
+    // Use original geometries with perturbed DoFs (no apply() needed)
+    double vol_p2 = compute_intersection_volume_cuda(geom1, geom2, dof1, dof2, dofs1_p2, dofs2_p2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_p1 = compute_intersection_volume_cuda(geom1, geom2, dof1, dof2, dofs1_p1, dofs2_p1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_m1 = compute_intersection_volume_cuda(geom1, geom2, dof1, dof2, dofs1_m1, dofs2_m1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_m2 = compute_intersection_volume_cuda(geom1, geom2, dof1, dof2, dofs1_m2, dofs2_m2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume;
     
     // 5-point finite difference: (-f(x+2h) + 8f(x+h) - 8f(x-h) + f(x-2h)) / (12h)
     grad(i) = (-vol_p2 + 8.0 * vol_p1 - 8.0 * vol_m1 + vol_m2) / (12.0 * eps);
@@ -481,14 +470,13 @@ bool test_intersection_volume_gradient_consistency(const std::string& leb_file) 
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, 52);
   
-  // Compute base volume
-  Geometry geom1_base = affine_dof1->apply(geom1, dofs1_base);
-  Geometry geom2_base = affine_dof2->apply(geom2, dofs2_base);
-  double vol_base = compute_intersection_volume_cuda(geom1_base, geom2_base, KG, 256, true);
+  // Compute base volume using unified interface
+  double vol_base = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, ComputationFlags::VOLUME_ONLY, 256, true).volume;
   
-  // Compute gradient
-  auto result = compute_intersection_volume_gradient_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, 256, true
+  // Compute gradient using unified interface
+  auto result = compute_intersection_volume_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, true
   );
   
   // Perturb DoFs and check volume change
@@ -501,8 +489,7 @@ bool test_intersection_volume_gradient_consistency(const std::string& leb_file) 
     Eigen::VectorXd dofs1_pert = dofs1_base;
     dofs1_pert(i) += eps;
     
-    Geometry geom1_pert = affine_dof1->apply(geom1, dofs1_pert);
-    double vol_pert = compute_intersection_volume_cuda(geom1_pert, geom2_base, KG, 256, false);
+    double vol_pert = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1_pert, dofs2_base, KG, ComputationFlags::VOLUME_ONLY, 256, false).volume;
     
     double vol_change = vol_pert - vol_base;
     double predicted_change = result.grad_geom1(i) * eps;
@@ -522,8 +509,7 @@ bool test_intersection_volume_gradient_consistency(const std::string& leb_file) 
     Eigen::VectorXd dofs2_pert = dofs2_base;
     dofs2_pert(i) += eps;
     
-    Geometry geom2_pert = affine_dof2->apply(geom2, dofs2_pert);
-    double vol_pert = compute_intersection_volume_cuda(geom1_base, geom2_pert, KG, 256, false);
+    double vol_pert = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_pert, KG, ComputationFlags::VOLUME_ONLY, 256, false).volume;
     
     double vol_change = vol_pert - vol_base;
     double predicted_change = result.grad_geom2(i) * eps;
@@ -578,17 +564,16 @@ bool test_volume_consistency_triangles(const std::string& leb_file) {
   KGrid KG = build_kgrid(L.dirs, L.weights, radial_points);
   
   // Compute volume using gradient routine
-  auto result = compute_intersection_volume_gradient_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, true
+  auto result = compute_intersection_volume_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, true
   );
   double volume_from_gradient = result.volume;
   
-  // Compute volume using standard routine
-  Geometry geom1_transformed = affine_dof1->apply(geom1, dofs1);
-  Geometry geom2_transformed = affine_dof2->apply(geom2, dofs2);
+  // Compute volume using standard routine (unified interface)
   double volume_from_standard = compute_intersection_volume_cuda(
-    geom1_transformed, geom2_transformed, KG, 256, false
-  );
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false
+  ).volume;
   
   // Compare
   double error = std::abs(volume_from_gradient - volume_from_standard);
@@ -667,13 +652,15 @@ bool test_triangle_gradient_comprehensive(const std::string& leb_file) {
   for (const auto& dofs1 : test_dofs1) {
     for (const auto& dofs2 : test_dofs2) {
       // Compute gradient using CPU
-      auto result_cpu = compute_intersection_volume_gradient_cpu(
-        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, false
+      auto result_cpu = compute_intersection_volume_cpu(
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+        static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), false
       );
       
       // Compute gradient using GPU
-      auto result_gpu = compute_intersection_volume_gradient_cuda(
-        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+      auto result_gpu = compute_intersection_volume_cuda(
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+        static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, false
       );
       
       // Compute gradient using finite differencing (uses GPU for volume computation)
@@ -1187,13 +1174,15 @@ bool test_disk_gradient_comprehensive(const std::string& leb_file) {
   for (const auto& dofs1 : test_dofs1) {
     for (const auto& dofs2 : test_dofs2) {
       // Compute gradient using CPU
-      auto result_cpu = compute_intersection_volume_gradient_cpu(
-        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, false
+      auto result_cpu = compute_intersection_volume_cpu(
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+        static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), false
       );
       
       // Compute gradient using GPU
-      auto result_gpu = compute_intersection_volume_gradient_cuda(
-        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+      auto result_gpu = compute_intersection_volume_cuda(
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+        static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, false
       );
       
       // Compute gradient using finite differencing (uses GPU for volume computation)
@@ -1365,21 +1354,19 @@ bool test_volume_consistency_disks(const std::string& leb_file) {
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, 52);
   
-  // Apply DoFs to get transformed geometries
-  Geometry geom1_transformed = affine_dof1->apply(geom1, dofs1);
-  Geometry geom2_transformed = affine_dof2->apply(geom2, dofs2);
+  // Compute volumes using different methods (unified interface)
+  double vol_cpu_non_grad = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false).volume;
+  double vol_gpu_non_grad = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false).volume;
   
-  // Compute volumes using different methods
-  double vol_cpu_non_grad = compute_intersection_volume_cpu(geom1_transformed, geom2_transformed, KG, false);
-  double vol_gpu_non_grad = compute_intersection_volume_cuda(geom1_transformed, geom2_transformed, KG, 256, false);
-  
-  auto result_cpu_grad = compute_intersection_volume_gradient_cpu(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, false
+  auto result_cpu_grad = compute_intersection_volume_cpu(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), false
   );
   double vol_cpu_grad = result_cpu_grad.volume;
   
-  auto result_gpu_grad = compute_intersection_volume_gradient_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+  auto result_gpu_grad = compute_intersection_volume_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, false
   );
   double vol_gpu_grad = result_gpu_grad.volume;
   
@@ -1652,16 +1639,18 @@ bool test_gaussian_gradient_comprehensive(const std::string& leb_file) {
   
   // Compute gradients using CPU
   auto t_cpu_start = std::chrono::high_resolution_clock::now();
-  auto result_cpu = compute_intersection_volume_gradient_cpu(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, false
+  auto result_cpu = compute_intersection_volume_cpu(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), false
   );
   auto t_cpu_end = std::chrono::high_resolution_clock::now();
   double cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
   
   // Compute gradients using GPU
   auto t_gpu_start = std::chrono::high_resolution_clock::now();
-  auto result_gpu = compute_intersection_volume_gradient_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+  auto result_gpu = compute_intersection_volume_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, false
   );
   auto t_gpu_end = std::chrono::high_resolution_clock::now();
   double gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
@@ -1808,21 +1797,19 @@ bool test_volume_consistency_gaussians(const std::string& leb_file) {
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, 52);
   
-  // Apply DoFs to get transformed geometries
-  Geometry geom1_transformed = affine_dof1->apply(geom1, dofs1);
-  Geometry geom2_transformed = affine_dof2->apply(geom2, dofs2);
+  // Compute volumes using different methods (unified interface)
+  double vol_cpu_non_grad = compute_intersection_volume_cpu(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, false).volume;
+  double vol_gpu_non_grad = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false).volume;
   
-  // Compute volumes using different methods
-  double vol_cpu_non_grad = compute_intersection_volume_cpu(geom1_transformed, geom2_transformed, KG, false);
-  double vol_gpu_non_grad = compute_intersection_volume_cuda(geom1_transformed, geom2_transformed, KG, 256, false);
-  
-  auto result_cpu_grad = compute_intersection_volume_gradient_cpu(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, false
+  auto result_cpu_grad = compute_intersection_volume_cpu(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), false
   );
   double vol_cpu_grad = result_cpu_grad.volume;
   
-  auto result_gpu_grad = compute_intersection_volume_gradient_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+  auto result_gpu_grad = compute_intersection_volume_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
+    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, false
   );
   double vol_gpu_grad = result_gpu_grad.volume;
   

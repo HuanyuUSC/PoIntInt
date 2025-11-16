@@ -7,7 +7,7 @@
 #include <Eigen/Dense>
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
-#include "compute_volume_unified.hpp"
+#include "compute_intersection_volume.hpp"
 #include "geometry/geometry.hpp"
 #include "dof/dof_parameterization.hpp"
 #include "quadrature/kgrid.hpp"
@@ -15,10 +15,10 @@
 namespace PoIntInt {
 
 // ============================================================================
-// CPU Implementation: Intersection Volume Unified
+// CPU Implementation: Intersection Volume
 // ============================================================================
 
-IntersectionVolumeResult compute_intersection_volume_unified_cpu(
+IntersectionVolumeResult compute_intersection_volume_cpu(
   const Geometry& ref_geom1,
   const Geometry& ref_geom2,
   const std::shared_ptr<DoFParameterization>& dof1,
@@ -192,7 +192,7 @@ IntersectionVolumeResult compute_intersection_volume_unified_cpu(
       t_end - t_start).count() / 1000.0;
     
     std::cout << std::fixed << std::setprecision(3);
-    std::cout << "\n=== CPU Unified Intersection Volume Profiler ===" << std::endl;
+    std::cout << "\n=== CPU Intersection Volume Profiler ===" << std::endl;
     std::cout << "K-grid nodes: " << Q << std::endl;
     std::cout << "DoFs per geometry: " << num_dofs1 << ", " << num_dofs2 << std::endl;
     std::cout << "Flags: Volume=" << needs_volume(flags) 
