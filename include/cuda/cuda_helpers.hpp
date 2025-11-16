@@ -147,8 +147,8 @@ __device__ __forceinline__ double J1_over_x(double x) {
   sincos(chi, &s, &c);
 
   double amp = sqrt(2.0 / (CUDART_PI * ax));
-  double cosp = (1.0 - 15.0 / 128.0 * invx2) * c;
-  double sinp = (3.0 / 8.0 * invx - 315.0 / 3072.0 * invx3) * s;
+  double cosp = (1.0 + 15.0 / 128.0 * invx2) * c;
+  double sinp = (3.0 / 8.0 * invx - 105.0 / 1024.0 * invx3) * s;
   double J1 = amp * (cosp - sinp);
   return J1 * invx;                          // J1(x)/x
 }
@@ -172,7 +172,7 @@ __device__ __forceinline__ double J1_over_x_prime(double x) {
     double sum = term;
 #pragma unroll
     for (int m = 0; m < 20; ++m) {
-      double denom = (double)(m + 2) * (double)(m + 3);
+      double denom = (double)(m + 1) * (double)(m + 3);
       term *= -q / denom;
       sum += term;
       if (fabs(term) < 1e-7 * fabs(sum)) break;
@@ -180,20 +180,21 @@ __device__ __forceinline__ double J1_over_x_prime(double x) {
     return -sum;  // -J2(x)/x
   }
   
-  // Large x: Hankel asymptotics for J2(x)
-  double invx = 1.0 / ax;
-  double invx2 = invx * invx;
-  double invx3 = invx2 * invx;
-  
-  double chi = ax - 1.25 * CUDART_PI;  // Phase for J2
+  // Large x: Hankel asymptotics for J2(x), then divide by x
+  double invax = 1.0 / ax;
+  double invax2 = invax * invax;
+  double invax3 = invax2 * invax;
+
+  double chi = ax - 1.25 * CUDART_PI;  // phase for J2 (ν = 2)
   double s, c;
   sincos(chi, &s, &c);
-  
+
   double amp = sqrt(2.0 / (CUDART_PI * ax));
-  double cosp = (1.0 - 105.0 / 128.0 * invx2) * c;
-  double sinp = (5.0 / 8.0 * invx - 945.0 / 1024.0 * invx3) * s;
+  double cosp = (1.0 - 105.0 / 128.0 * invax2) * c;
+  double sinp = (5.0 / 8.0 * invax - 945.0 / 1024.0 * invax3) * s;
   double J2 = amp * (cosp - sinp);
-  return -J2 * invx;  // -J2(x)/x
+
+  return -J2 / x;      // = -J2(x)/x
 }
 
 // E(z) = (sin z + i (1 - cos z)) / z, stable small-z
