@@ -321,6 +321,68 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
   return grad;
 }
 
+double AffineDoF::compute_volume(
+  const Geometry& geom,
+  const Eigen::VectorXd& dofs) const
+{
+  auto [A, t] = build_affine_transform(dofs);
+  double det_A = A.determinant();
+
+  // Compute base volume (volume of reference geometry)
+  // For triangle meshes: V = (1/3) * Σ_triangles (a · S)
+  double V_base = 0.0;
+  if (geom.type == GEOM_TRIANGLE) {
+    V_base = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.tris.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& tri = geom.tris[i];
+          Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
+          Eigen::Vector3d S(tri.S.x, tri.S.y, tri.S.z);
+          local_sum += a.dot(S);
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    V_base /= 3.0;
+  }
+  else if (geom.type == GEOM_DISK) {
+    V_base = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.disks.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& disk = geom.disks[i];
+          Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
+          Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
+          local_sum += c.dot(n) * disk.area;
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    V_base /= 3.0;
+  }
+  else if (geom.type == GEOM_GAUSSIAN) {
+    V_base = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.gaussians.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& gauss = geom.gaussians[i];
+          Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
+          Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
+          local_sum += c.dot(n) * gauss.w;
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    V_base /= 3.0;
+  }
+
+  return V_base * abs(det_A);
+}
+
 Eigen::VectorXd AffineDoF::compute_volume_gradient(
   const Geometry& geom,
   const Eigen::VectorXd& dofs) const

@@ -142,15 +142,48 @@ Eigen::VectorXcd TriangleMeshDoF::compute_A_gradient(
   return grad;
 }
 
+double TriangleMeshDoF::compute_volume(
+  const Geometry& geom,
+  const Eigen::VectorXd& dofs) const
+{
+  assert(geom.type == GEOM_TRIANGLE);       // geometry type is triangle mesh
+  assert(dofs.size() == num_dofs_);         // correct number of DoFs
+
+  // For each triangle, compute its contribution to the volume
+  // Volume: V = (1/6) * Σ_triangles |v_i, v_j, v_k|
+  double vol_accumulated = tbb::parallel_reduce(
+    tbb::blocked_range<int>(0, (int)geom.tris.size()),
+    0.0,
+    [&](const tbb::blocked_range<int>& r, double local_vol) -> double {
+      for (int f = r.begin(); f < r.end(); ++f) {
+        const auto& tri = geom.tris[f];
+        int i = tri.vid0;   // First vertex index
+        int j = tri.vid1;   // Second vertex index
+        int k_idx = tri.vid2;  // Third vertex index
+        // Skip if vertex indices are not set (shouldn't happen for TriangleMeshDoF)
+        if (i < 0 || j < 0 || k_idx < 0) continue;
+
+        // Triangle vertices
+        const Eigen::Vector3d& v_i = dofs.segment<3>(3 * i);
+        const Eigen::Vector3d& v_j = dofs.segment<3>(3 * j);
+        const Eigen::Vector3d& v_k = dofs.segment<3>(3 * k_idx);
+
+        local_vol += v_i.dot(v_j.cross(v_k));
+      }
+      return local_vol;
+    },
+    [](const double& a, const double& b) -> double {
+      return a + b;
+    });
+  return vol_accumulated / 6.0;
+}
+
 Eigen::VectorXd TriangleMeshDoF::compute_volume_gradient(
   const Geometry& geom,
   const Eigen::VectorXd& dofs) const
 {
   assert(geom.type == GEOM_TRIANGLE);       // geometry type is triangle mesh
   assert(dofs.size() == num_dofs_);         // correct number of DoFs
-  
-  // Initialize gradient
-  Eigen::VectorXd grad = Eigen::VectorXd::Zero(num_dofs_);
   
   // For each triangle, compute its contribution to the volume gradient
   // Volume: V = (1/6) * Σ_triangles |v_i, v_j, v_k|
@@ -181,9 +214,7 @@ Eigen::VectorXd TriangleMeshDoF::compute_volume_gradient(
     [](const Eigen::VectorXd& a, const Eigen::VectorXd& b) -> Eigen::VectorXd {
       return a + b;
     });
-  grad = grad_sum / 6.0;
-  
-  return grad;
+  return grad_sum / 6.0;
 }
 
 } // namespace PoIntInt

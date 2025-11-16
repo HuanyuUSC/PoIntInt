@@ -387,15 +387,11 @@ bool test_affine_dof_volume_gradient(const std::string& leb_file) {
   for (int i = 0; i < 12; ++i) {
     Eigen::VectorXd dofs_plus = dofs;
     dofs_plus(i) += eps;
-    double vol_plus = compute_intersection_volume_cuda(
-      geom, geom, affine_dof, identity_dof, dofs_plus, identity_dofs, KG, 
-      ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_plus = affine_dof->compute_volume(geom, dofs_plus);
 
     Eigen::VectorXd dofs_minus = dofs;
     dofs_minus(i) -= eps;
-    double vol_minus = compute_intersection_volume_cuda(
-      geom, geom, affine_dof, identity_dof, dofs_minus, identity_dofs, KG, 
-      ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_minus = affine_dof->compute_volume(geom, dofs_minus);
 
     grad_fd(i) = (vol_plus - vol_minus) / (2.0 * eps);
   }
@@ -668,15 +664,11 @@ bool test_triangle_mesh_dof_volume_gradient(const std::string& leb_file) {
   for (int i = 0; i < 24; ++i) {
     Eigen::VectorXd dofs_plus = dofs;
     dofs_plus(i) += eps;
-    double vol_plus = compute_intersection_volume_cuda(
-      geom, geom, mesh_dof, identity_dof, dofs_plus, identity_dofs, KG, 
-      ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_plus = mesh_dof->compute_volume(geom, dofs_plus);
 
     Eigen::VectorXd dofs_minus = dofs;
     dofs_minus(i) -= eps;
-    double vol_minus = compute_intersection_volume_cuda(
-      geom, geom, mesh_dof, identity_dof, dofs_minus, identity_dofs, KG, 
-      ComputationFlags::VOLUME_ONLY, 256, false).volume;
+    double vol_minus = mesh_dof->compute_volume(geom, dofs_minus);
 
     grad_fd(i) = (vol_plus - vol_minus) / (2.0 * eps);
   }

@@ -26,6 +26,11 @@ struct DoFParameterization {
     compute_A_gradient(const Geometry& geom, const Eigen::Vector3d& k, 
                       const Eigen::VectorXd& dofs) const = 0;
   
+  // Compute volume (using divergence theorem) given concrete DoFs value
+  // Volume: V = (1/3) ∫_S (x, y, z) · n dS
+  // Returns: V (double)
+  virtual double compute_volume(const Geometry& geom, const Eigen::VectorXd& dofs) const = 0;
+
   // Compute gradient of volume (using divergence theorem) w.r.t. DoFs
   // Volume: V = (1/3) ∫_S (x, y, z) · n dS
   // Returns: dV/dθ for each DoF (real vector of size num_dofs)

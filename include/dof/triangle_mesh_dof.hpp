@@ -25,6 +25,9 @@ struct TriangleMeshDoF : public DoFParameterization {
   Eigen::VectorXcd 
     compute_A_gradient(const Geometry& geom, const Eigen::Vector3d& k, 
                       const Eigen::VectorXd& dofs) const override;
+
+  // Compute volume
+  double compute_volume(const Geometry& geom, const Eigen::VectorXd& dofs) const override;
   
   // Compute gradient of volume w.r.t. vertex positions
   Eigen::VectorXd
