@@ -49,76 +49,7 @@ Eigen::VectorXcd compute_gradient_finite_diff(
   return grad;
 }
 
-// ============================================================================
-// Test 1: AffineDoF apply() function
-// ============================================================================
-bool test_affine_apply() {
-  std::cout << "\n=== Test 1: AffineDoF apply() ===" << std::endl;
-  
-  // Create a simple unit cube mesh
-  Eigen::MatrixXd V(8, 3);
-  V <<
-    -0.5, -0.5, -0.5,   0.5, -0.5, -0.5,   0.5,  0.5, -0.5,  -0.5,  0.5, -0.5,
-    -0.5, -0.5,  0.5,   0.5, -0.5,  0.5,   0.5,  0.5,  0.5,  -0.5,  0.5,  0.5;
-  Eigen::MatrixXi F(12, 3);
-  F <<
-    0, 2, 1,  0, 3, 2,  4, 5, 6,  4, 6, 7,
-    0, 1, 5,  0, 5, 4,  2, 7, 6,  2, 3, 7,
-    0, 4, 7,  0, 7, 3,  1, 6, 5,  1, 2, 6;
-  
-  auto geom = make_triangle_mesh(V, F);
-  
-  // Create AffineDoF
-  auto affine_dof = std::make_shared<AffineDoF>();
-  
-  // Test translation only
-  // New parameterization: [translation(3), matrix(9)]
-  // For identity matrix + translation: [tx, ty, tz, 1, 0, 0, 0, 1, 0, 0, 0, 1]
-  Eigen::VectorXd dofs(12);
-  dofs << 1.0, 2.0, 3.0,  // translation
-          1.0, 0.0, 0.0,  // matrix row 0: [1, 0, 0]
-          0.0, 1.0, 0.0,  // matrix row 1: [0, 1, 0]
-          0.0, 0.0, 1.0;  // matrix row 2: [0, 0, 1]
-  
-  Geometry transformed = affine_dof->apply(geom, dofs);
-  
-  // Reconstruct original vertices from original geometry
-  std::vector<Eigen::Vector3d> orig_vertices;
-  for (const auto& tri : geom.tris) {
-    Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
-    orig_vertices.push_back(a);
-    orig_vertices.push_back(a + Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z));
-    orig_vertices.push_back(a + Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z));
-  }
-  
-  // Reconstruct transformed vertices
-  std::vector<Eigen::Vector3d> trans_vertices;
-  for (const auto& tri : transformed.tris) {
-    Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
-    trans_vertices.push_back(a);
-    trans_vertices.push_back(a + Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z));
-    trans_vertices.push_back(a + Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z));
-  }
-  
-  // Check that vertices are translated correctly
-  bool passed = true;
-  Eigen::Vector3d translation(1.0, 2.0, 3.0);
-  for (size_t i = 0; i < orig_vertices.size() && i < trans_vertices.size(); ++i) {
-    Eigen::Vector3d expected = orig_vertices[i] + translation;
-    double error = (trans_vertices[i] - expected).norm();
-    if (error > 1e-4) {
-      std::cout << "  Error: Translation failed for vertex " << i << std::endl;
-      std::cout << "    Original: " << orig_vertices[i].transpose() << std::endl;
-      std::cout << "    Expected: " << expected.transpose() << std::endl;
-      std::cout << "    Got:      " << trans_vertices[i].transpose() << std::endl;
-      passed = false;
-      if (i >= 5) break;  // Only show first few errors
-    }
-  }
-  
-  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
-  return passed;
-}
+// Note: Test for apply() has been removed since apply() is no longer part of the interface
 
 // ============================================================================
 // Test 2: AffineDoF A(k) gradient computation (triangle mesh)
@@ -410,7 +341,7 @@ bool test_affine_dof_gradient_gaussian_splat() {
 // ============================================================================
 // Test 5: AffineDoF volume gradient computation
 // ============================================================================
-bool test_affine_dof_volume_gradient() {
+bool test_affine_dof_volume_gradient(const std::string& leb_file) {
   std::cout << "\n=== Test 5: AffineDoF Volume Gradient ===" << std::endl;
 
   // Create a simple unit cube mesh
@@ -441,16 +372,30 @@ bool test_affine_dof_volume_gradient() {
   Eigen::VectorXd grad_fd = Eigen::VectorXd::Zero(12);
   double eps = 1e-1;
 
+  // Create identity DoF for second geometry (self-intersection)
+  auto identity_dof = std::make_shared<AffineDoF>();
+  Eigen::VectorXd identity_dofs(12);
+  identity_dofs << 0.0, 0.0, 0.0,  // translation
+                   1.0, 0.0, 0.0,  // matrix row 0: [1, 0, 0]
+                   0.0, 1.0, 0.0,  // matrix row 1: [0, 1, 0]
+                   0.0, 0.0, 1.0;  // matrix row 2: [0, 0, 1]
+  
+  // Load Lebedev grid for volume computation
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 32);
+  
   for (int i = 0; i < 12; ++i) {
     Eigen::VectorXd dofs_plus = dofs;
     dofs_plus(i) += eps;
-    Geometry geom_plus = affine_dof->apply(geom, dofs_plus);
-    double vol_plus = compute_volume_cpu(geom_plus);
+    double vol_plus = compute_intersection_volume_cuda(
+      geom, geom, affine_dof, identity_dof, dofs_plus, identity_dofs, KG, 
+      ComputationFlags::VOLUME_ONLY, 256, false).volume;
 
     Eigen::VectorXd dofs_minus = dofs;
     dofs_minus(i) -= eps;
-    Geometry geom_minus = affine_dof->apply(geom, dofs_minus);
-    double vol_minus = compute_volume_cpu(geom_minus);
+    double vol_minus = compute_intersection_volume_cuda(
+      geom, geom, affine_dof, identity_dof, dofs_minus, identity_dofs, KG, 
+      ComputationFlags::VOLUME_ONLY, 256, false).volume;
 
     grad_fd(i) = (vol_plus - vol_minus) / (2.0 * eps);
   }
@@ -541,12 +486,23 @@ bool test_gradient_volume_consistency(const std::string& leb_file, int Nrad = 32
                1.0, 0.0, 0.0,  // matrix row 0: [1, 0, 0]
                0.0, 1.0, 0.0,  // matrix row 1: [0, 1, 0]
                0.0, 0.0, 1.0;  // matrix row 2: [0, 0, 1]
-  Geometry geom1_base = affine_dof->apply(geom1, dofs_base);
-  double vol_base = compute_intersection_volume_cuda(geom1_base, geom2, KG, 256, false);
+  // Create identity DoF for second geometry
+  auto identity_dof = std::make_shared<AffineDoF>();
+  Eigen::VectorXd identity_dofs(12);
+  identity_dofs << 0.0, 0.0, 0.0,  // translation
+                   1.0, 0.0, 0.0,  // matrix row 0: [1, 0, 0]
+                   0.0, 1.0, 0.0,  // matrix row 1: [0, 1, 0]
+                   0.0, 0.0, 1.0;  // matrix row 2: [0, 0, 1]
   
-  // Compute volume at perturbed DoFs
-  Geometry geom1_transformed = affine_dof->apply(geom1, dofs);
-  double vol_perturbed = compute_intersection_volume_cuda(geom1_transformed, geom2, KG, 256, false);
+  // Compute base volume using unified interface
+  double vol_base = compute_intersection_volume_cuda(
+    geom1, geom2, affine_dof, identity_dof, dofs_base, identity_dofs, KG, 
+    ComputationFlags::VOLUME_ONLY, 256, false).volume;
+  
+  // Compute volume at perturbed DoFs using unified interface
+  double vol_perturbed = compute_intersection_volume_cuda(
+    geom1, geom2, affine_dof, identity_dof, dofs, identity_dofs, KG, 
+    ComputationFlags::VOLUME_ONLY, 256, false).volume;
   
   // Compute gradient and predict volume change
   // This is a simplified test - in practice, we'd integrate gradients over k-space
@@ -572,71 +528,7 @@ bool test_gradient_volume_consistency(const std::string& leb_file, int Nrad = 32
 // ============================================================================
 // Test 7: TriangleMeshDoF apply() function
 // ============================================================================
-bool test_triangle_mesh_dof_apply() {
-  std::cout << "\n=== Test 7: TriangleMeshDoF apply() ===" << std::endl;
-  
-  // Create a simple unit cube mesh
-  Eigen::MatrixXd V(8, 3);
-  V <<
-    -0.5, -0.5, -0.5,   0.5, -0.5, -0.5,   0.5,  0.5, -0.5,  -0.5,  0.5, -0.5,
-    -0.5, -0.5,  0.5,   0.5, -0.5,  0.5,   0.5,  0.5,  0.5,  -0.5,  0.5,  0.5;
-  Eigen::MatrixXi F(12, 3);
-  F <<
-    0, 2, 1,  0, 3, 2,  4, 5, 6,  4, 6, 7,
-    0, 1, 5,  0, 5, 4,  2, 7, 6,  2, 3, 7,
-    0, 4, 7,  0, 7, 3,  1, 6, 5,  1, 2, 6;
-  
-  auto geom = make_triangle_mesh(V, F);
-  
-  // Create TriangleMeshDoF
-  auto mesh_dof = std::make_shared<TriangleMeshDoF>(V, F);
-  
-  // Test translation: translate all vertices by (1, 2, 3)
-  Eigen::VectorXd dofs(24);  // 8 vertices * 3 coordinates
-  for (int i = 0; i < 8; ++i) {
-    dofs(3*i + 0) = V(i, 0) + 1.0;
-    dofs(3*i + 1) = V(i, 1) + 2.0;
-    dofs(3*i + 2) = V(i, 2) + 3.0;
-  }
-  
-  Geometry transformed = mesh_dof->apply(geom, dofs);
-  
-  // Reconstruct original vertices from original geometry
-  std::vector<Eigen::Vector3d> orig_vertices;
-  for (const auto& tri : geom.tris) {
-    Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
-    orig_vertices.push_back(a);
-    orig_vertices.push_back(a + Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z));
-    orig_vertices.push_back(a + Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z));
-  }
-  
-  // Reconstruct transformed vertices
-  std::vector<Eigen::Vector3d> trans_vertices;
-  for (const auto& tri : transformed.tris) {
-    Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
-    trans_vertices.push_back(a);
-    trans_vertices.push_back(a + Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z));
-    trans_vertices.push_back(a + Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z));
-  }
-  
-  // Check that vertices are translated correctly
-  bool passed = true;
-  Eigen::Vector3d translation(1.0, 2.0, 3.0);
-  for (size_t i = 0; i < orig_vertices.size() && i < trans_vertices.size(); ++i) {
-    Eigen::Vector3d expected = orig_vertices[i] + translation;
-    double error = (trans_vertices[i] - expected).norm();
-    if (error > 1e-4) {
-      std::cout << "  Error: Translation failed for vertex " << i << std::endl;
-      std::cout << "    Expected: " << expected.transpose() << std::endl;
-      std::cout << "    Got:      " << trans_vertices[i].transpose() << std::endl;
-      passed = false;
-      if (i >= 5) break;  // Only show first few errors
-    }
-  }
-  
-  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
-  return passed;
-}
+// Note: Test for apply() has been removed since apply() is no longer part of the interface
 
 // ============================================================================
 // Test 8: TriangleMeshDoF A(k) gradient computation
@@ -729,7 +621,7 @@ bool test_triangle_mesh_dof_gradient(const std::string& leb_file, int Nrad = 32)
 // ============================================================================
 // Test 9: TriangleMeshDoF volume gradient computation
 // ============================================================================
-bool test_triangle_mesh_dof_volume_gradient() {
+bool test_triangle_mesh_dof_volume_gradient(const std::string& leb_file) {
   std::cout << "\n=== Test 9: TriangleMeshDoF Volume Gradient ===" << std::endl;
 
   // Create a simple unit cube mesh
@@ -761,16 +653,30 @@ bool test_triangle_mesh_dof_volume_gradient() {
   Eigen::VectorXd grad_fd = Eigen::VectorXd::Zero(24);
   double eps = 1e-3;
 
+  // Create identity DoF for second geometry (self-intersection) - outside loop for efficiency
+  auto identity_dof = std::make_shared<AffineDoF>();
+  Eigen::VectorXd identity_dofs(12);
+  identity_dofs << 0.0, 0.0, 0.0,  // translation
+                   1.0, 0.0, 0.0,  // matrix row 0: [1, 0, 0]
+                   0.0, 1.0, 0.0,  // matrix row 1: [0, 1, 0]
+                   0.0, 0.0, 1.0;  // matrix row 2: [0, 0, 1]
+  
+  // Load Lebedev grid for volume computation - outside loop for efficiency
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 32);
+
   for (int i = 0; i < 24; ++i) {
     Eigen::VectorXd dofs_plus = dofs;
     dofs_plus(i) += eps;
-    Geometry geom_plus = mesh_dof->apply(geom, dofs_plus);
-    double vol_plus = compute_volume_cpu(geom_plus);
+    double vol_plus = compute_intersection_volume_cuda(
+      geom, geom, mesh_dof, identity_dof, dofs_plus, identity_dofs, KG, 
+      ComputationFlags::VOLUME_ONLY, 256, false).volume;
 
     Eigen::VectorXd dofs_minus = dofs;
     dofs_minus(i) -= eps;
-    Geometry geom_minus = mesh_dof->apply(geom, dofs_minus);
-    double vol_minus = compute_volume_cpu(geom_minus);
+    double vol_minus = compute_intersection_volume_cuda(
+      geom, geom, mesh_dof, identity_dof, dofs_minus, identity_dofs, KG, 
+      ComputationFlags::VOLUME_ONLY, 256, false).volume;
 
     grad_fd(i) = (vol_plus - vol_minus) / (2.0 * eps);
   }
@@ -850,16 +756,27 @@ bool test_triangle_mesh_dof_volume_consistency(const std::string& leb_file, int 
     dofs_base(3*i + 2) = V(i, 2);
   }
   
-  // Compute base volume
-  Geometry geom_base = mesh_dof->apply(geom, dofs_base);
-  double vol_base = compute_intersection_volume_cuda(geom_base, geom_base, KG, 256, false);
+  // Create identity DoF for second geometry (self-intersection)
+  auto identity_dof = std::make_shared<AffineDoF>();
+  Eigen::VectorXd identity_dofs(12);
+  identity_dofs << 0.0, 0.0, 0.0,  // translation
+                   1.0, 0.0, 0.0,  // matrix row 0: [1, 0, 0]
+                   0.0, 1.0, 0.0,  // matrix row 1: [0, 1, 0]
+                   0.0, 0.0, 1.0;  // matrix row 2: [0, 0, 1]
+  
+  // Compute base volume using unified interface (self-intersection)
+  double vol_base = compute_intersection_volume_cuda(
+    geom, geom, mesh_dof, identity_dof, dofs_base, identity_dofs, KG, 
+    ComputationFlags::VOLUME_ONLY, 256, false).volume;
   
   // Perturb one vertex slightly
   Eigen::VectorXd dofs_perturbed = dofs_base;
   dofs_perturbed(0) += 0.01;  // Perturb x-coordinate of first vertex
   
-  Geometry geom_perturbed = mesh_dof->apply(geom, dofs_perturbed);
-  double vol_perturbed = compute_intersection_volume_cuda(geom_perturbed, geom_perturbed, KG, 256, false);
+  // Compute perturbed volume using unified interface (self-intersection)
+  double vol_perturbed = compute_intersection_volume_cuda(
+    geom, geom, mesh_dof, identity_dof, dofs_perturbed, identity_dofs, KG, 
+    ComputationFlags::VOLUME_ONLY, 256, false).volume;
   
   double vol_change = vol_perturbed - vol_base;
   
@@ -899,7 +816,7 @@ int main(int argc, char** argv) {
   // ============================================================================
   
   // Test 1: AffineDoF apply() - basic functionality
-  all_passed &= test_affine_apply();
+  // test_affine_apply() removed - apply() is no longer part of the interface
   
   // Test 2: AffineDoF A(k) gradient computation (triangle mesh)
   all_passed &= test_affine_dof_gradient_triangle_mesh(leb_file, Nrad);
@@ -911,7 +828,7 @@ int main(int argc, char** argv) {
   all_passed &= test_affine_dof_gradient_gaussian_splat();
   
   // Test 5: AffineDoF volume gradient
-  all_passed &= test_affine_dof_volume_gradient();
+  all_passed &= test_affine_dof_volume_gradient(leb_file);
   
   // Test 6: AffineDoF gradient-volume consistency
   all_passed &= test_gradient_volume_consistency(leb_file, Nrad);
@@ -920,14 +837,13 @@ int main(int argc, char** argv) {
   // TriangleMeshDoF Tests
   // ============================================================================
   
-  // Test 7: TriangleMeshDoF apply() - basic functionality
-  all_passed &= test_triangle_mesh_dof_apply();
+  // Test 7: TriangleMeshDoF apply() - removed since apply() is no longer part of the interface
   
   // Test 8: TriangleMeshDoF A(k) gradient computation
   all_passed &= test_triangle_mesh_dof_gradient(leb_file, Nrad);
   
   // Test 9: TriangleMeshDoF volume gradient
-  all_passed &= test_triangle_mesh_dof_volume_gradient();
+  all_passed &= test_triangle_mesh_dof_volume_gradient(leb_file);
   
   // Test 10: TriangleMeshDoF gradient-volume consistency
   all_passed &= test_triangle_mesh_dof_volume_consistency(leb_file, Nrad);

@@ -17,9 +17,10 @@ namespace PoIntInt {
 struct AffineDoF_Decomposed : public DoFParameterization {
   int num_dofs() const override { return 12; }
   
-  // Apply affine transformation: x -> A*x + t
-  // where A = R * S * H (rotation * scale * shear)
-  Geometry apply(const Geometry& geom, const Eigen::VectorXd& dofs) const override;
+  // Compute form factor A(k) for the geometry with given DoFs
+  std::complex<double>
+    compute_A(const Geometry& geom, const Eigen::Vector3d& k,
+              const Eigen::VectorXd& dofs) const override;
   
   // Compute gradient of form factor A(k) w.r.t. DoFs
   Eigen::VectorXcd 

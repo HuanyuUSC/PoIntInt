@@ -14,9 +14,6 @@ struct TriangleMeshDoF : public DoFParameterization {
   
   int num_dofs() const override { return num_dofs_; }
   
-  // Apply vertex positions to geometry (updates triangles and recalculates S)
-  Geometry apply(const Geometry& geom, const Eigen::VectorXd& dofs) const override;
-
   virtual std::complex<double>
     compute_A(const Geometry& geom, const Eigen::Vector3d& k,
       const Eigen::VectorXd& dofs) const override;

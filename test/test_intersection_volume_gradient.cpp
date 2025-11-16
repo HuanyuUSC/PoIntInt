@@ -63,9 +63,7 @@ Eigen::VectorXd compute_intersection_volume_gradient_finite_diff(
   int n_dofs = (which_geometry == 1) ? dof1->num_dofs() : dof2->num_dofs();
   Eigen::VectorXd grad(n_dofs);
   
-  // Compute base volume at unperturbed DoFs (for reference, though not used in formula)
-  Geometry geom1_base = dof1->apply(geom1, dofs1);
-  Geometry geom2_base = dof2->apply(geom2, dofs2);
+  // Note: We no longer use apply() - the unified interface works directly with reference geometry + DoFs
   
   for (int i = 0; i < n_dofs; ++i) {
     // 5-point finite difference for better accuracy

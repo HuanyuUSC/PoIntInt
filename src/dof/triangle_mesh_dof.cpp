@@ -16,31 +16,6 @@ TriangleMeshDoF::TriangleMeshDoF(const Eigen::MatrixXd& V, const Eigen::MatrixXi
   assert(F.maxCoeff() < V.rows());  // Face indices must be valid
 }
 
-Geometry TriangleMeshDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) const {
-  assert(geom.type == GEOM_TRIANGLE);       // geometry type is triangle mesh
-  assert(geom.tris.size() == F_.rows());    // number of triangles matches
-  assert(dofs.size() == num_dofs_);         // correct number of DoFs
-  
-  // Reconstruct triangles from new vertex positions
-  // Use the stored face connectivity F_
-  Geometry transformed = geom;
-  tbb::parallel_for(tbb::blocked_range<int>(0, F_.rows()),
-    [&](const tbb::blocked_range<int>& r) {
-      for (int i = r.begin(); i < r.end(); ++i) {
-        Eigen::Vector3d a = dofs.segment<3>(3 * F_(i, 0));
-        Eigen::Vector3d e1 = dofs.segment<3>(3 * F_(i, 1)) - a;
-        Eigen::Vector3d e2 = dofs.segment<3>(3 * F_(i, 2)) - a;
-        Eigen::Vector3d S = 0.5 * e1.cross(e2);
-        transformed.tris[i].a = make_double3(a.x(), a.y(), a.z());
-        transformed.tris[i].e1 = make_double3(e1.x(), e1.y(), e1.z());
-        transformed.tris[i].e2 = make_double3(e2.x(), e2.y(), e2.z());
-        transformed.tris[i].S = make_double3(S.x(), S.y(), S.z());
-      }
-    });
-  
-  return transformed;
-}
-
 std::complex<double> TriangleMeshDoF::compute_A(
   const Geometry& geom,
   const Eigen::Vector3d& k,

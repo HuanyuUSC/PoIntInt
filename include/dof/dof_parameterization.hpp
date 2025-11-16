@@ -13,15 +13,11 @@ struct DoFParameterization {
   // Number of DoFs
   virtual int num_dofs() const = 0;
   
-  // Apply transformation to geometry (returns transformed geometry)
-  virtual Geometry apply(const Geometry& geom, const Eigen::VectorXd& dofs) const = 0;
-
+  // Compute form factor A(k) for the geometry with given DoFs
+  // Note: This should work directly with reference geometry + DoFs (no apply() needed)
   virtual std::complex<double>
     compute_A(const Geometry& geom, const Eigen::Vector3d& k,
-      const Eigen::VectorXd& dofs) const
-  {
-    return compute_A_geometry(apply(geom, dofs), k);
-  }
+      const Eigen::VectorXd& dofs) const = 0;
   
   // Compute gradient of form factor A(k) w.r.t. DoFs
   // Returns: dA/dθ for each DoF (complex vector of size num_dofs)
