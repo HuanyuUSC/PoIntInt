@@ -8,9 +8,11 @@ namespace PoIntInt {
 // Triangle mesh DoF parameterization
 // DoFs are vertex positions: [v0_x, v0_y, v0_z, v1_x, v1_y, v1_z, ...]
 // The number of DoFs is 3 * num_vertices
+// Face connectivity is extracted from the geometry's TriPacked structures
 struct TriangleMeshDoF : public DoFParameterization {
-  // Constructor: takes the original mesh (V, F) to know connectivity
-  TriangleMeshDoF(const Eigen::MatrixXd& V, const Eigen::MatrixXi& F);
+  // Constructor: takes the number of vertices
+  // Face connectivity is retrieved from the geometry's TriPacked structures
+  explicit TriangleMeshDoF(int num_vertices);
   
   int num_dofs() const override { return num_dofs_; }
   
@@ -31,7 +33,6 @@ struct TriangleMeshDoF : public DoFParameterization {
 private:
   int num_vertices_;  // Number of vertices
   int num_dofs_;      // 3 * num_vertices
-  Eigen::MatrixXi F_; // Face connectivity (needed to reconstruct triangles)
 };
 
 } // namespace PoIntInt

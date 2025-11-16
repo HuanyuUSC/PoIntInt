@@ -9,11 +9,10 @@
 
 namespace PoIntInt {
 
-TriangleMeshDoF::TriangleMeshDoF(const Eigen::MatrixXd& V, const Eigen::MatrixXi& F)
-  : num_vertices_(V.rows()), num_dofs_(3 * V.rows()), F_(F)
+TriangleMeshDoF::TriangleMeshDoF(int num_vertices)
+  : num_vertices_(num_vertices), num_dofs_(3 * num_vertices)
 {
-  assert(V.cols() == 3 && F.cols() == 3);
-  assert(F.maxCoeff() < V.rows());  // Face indices must be valid
+  assert(num_vertices > 0);
 }
 
 std::complex<double> TriangleMeshDoF::compute_A(
@@ -22,7 +21,6 @@ std::complex<double> TriangleMeshDoF::compute_A(
   const Eigen::VectorXd& dofs) const
 {
   assert(geom.type == GEOM_TRIANGLE);       // geometry type is triangle mesh
-  assert(geom.tris.size() == F_.rows());    // number of triangles matches
   assert(dofs.size() == num_dofs_);         // correct number of DoFs
 
   std::complex<double> A(0.0, 0.0);
@@ -35,13 +33,16 @@ std::complex<double> TriangleMeshDoF::compute_A(
   // the imaginary unit
   static const std::complex<double> I(0.0, 1.0);
 
-  // Per-face loop
+  // Per-face loop - extract vertex indices from TriPacked structures
   A = tbb::parallel_reduce(
-    tbb::blocked_range<int>(0, F_.rows()),
+    tbb::blocked_range<int>(0, (int)geom.tris.size()),
     std::complex<double>(0.0, 0.0),
     [&](const tbb::blocked_range<int>& r, std::complex<double> local_sum) -> std::complex<double> {
       for (int f = r.begin(); f < r.end(); ++f) {
-        const Eigen::Vector3i& vid = F_.row(f);
+        const auto& tri = geom.tris[f];
+        int vid[3] = { tri.vid0, tri.vid1, tri.vid2 };
+        // Skip if vertex indices are not set (shouldn't happen for TriangleMeshDoF)
+        if (vid[0] < 0 || vid[1] < 0 || vid[2] < 0) continue;
         Eigen::Vector3d v[3] = { dofs.segment<3>(3 * vid[0]),
           dofs.segment<3>(3 * vid[1]), dofs.segment<3>(3 * vid[2]) };
 
@@ -78,7 +79,6 @@ Eigen::VectorXcd TriangleMeshDoF::compute_A_gradient(
   const Eigen::VectorXd& dofs) const
 {
   assert(geom.type == GEOM_TRIANGLE);       // geometry type is triangle mesh
-  assert(geom.tris.size() == F_.rows());    // number of triangles matches
   assert(dofs.size() == num_dofs_);         // correct number of DoFs
   
   Eigen::VectorXcd grad = Eigen::VectorXcd::Zero(num_dofs_);
@@ -91,14 +91,17 @@ Eigen::VectorXcd TriangleMeshDoF::compute_A_gradient(
   // the imaginary unit
   static const std::complex<double> I(0.0, 1.0);
 
-  // Per-face loop
+  // Per-face loop - extract vertex indices from TriPacked structures
   Eigen::VectorXcd init_grad = Eigen::VectorXcd::Zero(num_dofs_);
   Eigen::VectorXcd grad_sum = tbb::parallel_reduce(
-    tbb::blocked_range<int>(0, F_.rows()),
+    tbb::blocked_range<int>(0, (int)geom.tris.size()),
     init_grad,
     [&](const tbb::blocked_range<int>& r, Eigen::VectorXcd local_grad) -> Eigen::VectorXcd {
       for (int f = r.begin(); f < r.end(); ++f) {
-        const Eigen::Vector3i& vid = F_.row(f);
+        const auto& tri = geom.tris[f];
+        int vid[3] = { tri.vid0, tri.vid1, tri.vid2 };
+        // Skip if vertex indices are not set (shouldn't happen for TriangleMeshDoF)
+        if (vid[0] < 0 || vid[1] < 0 || vid[2] < 0) continue;
         Eigen::Vector3d v[3] = { dofs.segment<3>(3 * vid[0]),
           dofs.segment<3>(3 * vid[1]), dofs.segment<3>(3 * vid[2])};
 
@@ -144,7 +147,6 @@ Eigen::VectorXd TriangleMeshDoF::compute_volume_gradient(
   const Eigen::VectorXd& dofs) const
 {
   assert(geom.type == GEOM_TRIANGLE);       // geometry type is triangle mesh
-  assert(geom.tris.size() == F_.rows());    // number of triangles matches
   assert(dofs.size() == num_dofs_);         // correct number of DoFs
   
   // Initialize gradient
@@ -154,13 +156,16 @@ Eigen::VectorXd TriangleMeshDoF::compute_volume_gradient(
   // Volume: V = (1/6) * Σ_triangles |v_i, v_j, v_k|
   Eigen::VectorXd init_grad = Eigen::VectorXd::Zero(num_dofs_);
   Eigen::VectorXd grad_sum = tbb::parallel_reduce(
-    tbb::blocked_range<int>(0, F_.rows()),
+    tbb::blocked_range<int>(0, (int)geom.tris.size()),
     init_grad,
     [&](const tbb::blocked_range<int>& r, Eigen::VectorXd local_grad) -> Eigen::VectorXd {
       for (int f = r.begin(); f < r.end(); ++f) {
-        int i = F_(f, 0);  // First vertex index
-        int j = F_(f, 1);  // Second vertex index
-        int k_idx = F_(f, 2);  // Third vertex index
+        const auto& tri = geom.tris[f];
+        int i = tri.vid0;   // First vertex index
+        int j = tri.vid1;   // Second vertex index
+        int k_idx = tri.vid2;  // Third vertex index
+        // Skip if vertex indices are not set (shouldn't happen for TriangleMeshDoF)
+        if (i < 0 || j < 0 || k_idx < 0) continue;
         
         // Triangle vertices
         const Eigen::Vector3d& v_i = dofs.segment<3>(3 * i);

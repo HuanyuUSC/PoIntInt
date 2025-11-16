@@ -548,7 +548,7 @@ bool test_triangle_mesh_dof_gradient(const std::string& leb_file, int Nrad = 32)
     0, 4, 7,  0, 7, 3,  1, 6, 5,  1, 2, 6;
   
   auto geom = make_triangle_mesh(V, F);
-  auto mesh_dof = std::make_shared<TriangleMeshDoF>(V, F);
+  auto mesh_dof = std::make_shared<TriangleMeshDoF>(V.rows());
   
   // Create DoF vector from original vertices
   Eigen::VectorXd dofs(24);
@@ -636,7 +636,7 @@ bool test_triangle_mesh_dof_volume_gradient(const std::string& leb_file) {
     0, 4, 7, 0, 7, 3, 1, 6, 5, 1, 2, 6;
 
   auto geom = make_triangle_mesh(V, F);
-  auto mesh_dof = std::make_shared<TriangleMeshDoF>(V, F);
+  auto mesh_dof = std::make_shared<TriangleMeshDoF>(V.rows());
 
   // Create DoF vector from original vertices
   Eigen::VectorXd dofs(24);
@@ -742,7 +742,7 @@ bool test_triangle_mesh_dof_volume_consistency(const std::string& leb_file, int 
     0, 4, 7,  0, 7, 3,  1, 6, 5,  1, 2, 6;
   
   auto geom = make_triangle_mesh(V, F);
-  auto mesh_dof = std::make_shared<TriangleMeshDoF>(V, F);
+  auto mesh_dof = std::make_shared<TriangleMeshDoF>(V.rows());
   
   // Load Lebedev grid
   LebedevGrid L = load_lebedev_txt(leb_file);

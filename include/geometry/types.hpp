@@ -11,6 +11,9 @@ struct TriPacked {
   double3 e1;  // b - a
   double3 e2;  // c - a
   double3 S;   // 0.5 * (e1 x e2)  (oriented area vector)
+  int vid0;    // vertex index 0 (for TriangleMeshDoF - allows reconstruction from DoFs)
+  int vid1;    // vertex index 1
+  int vid2;    // vertex index 2
 };
 
 // Oriented point cloud element (circular disk surfel)

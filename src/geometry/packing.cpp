@@ -21,6 +21,9 @@ std::vector<TriPacked> pack_tris(const Eigen::MatrixXd& V, const Eigen::MatrixXi
         T[i].e1 = make_double3(e1.x(), e1.y(), e1.z());
         T[i].e2 = make_double3(e2.x(), e2.y(), e2.z());
         T[i].S  = make_double3(S.x(), S.y(), S.z());
+        T[i].vid0 = ia;  // Store vertex indices for TriangleMeshDoF
+        T[i].vid1 = ib;
+        T[i].vid2 = ic;
       }
     });
   return T;
