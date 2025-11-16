@@ -203,13 +203,7 @@ extern "C" __global__ void compute_A_affine_disk_kernel(
     
     // Compute S_magnitude
     double rho_r = disk.rho * r;
-    double Smag;
-    if (rho_r < 1e-10) {
-      Smag = disk.area;
-    } else {
-      double x = fmin(rho_r, 100.0);
-      Smag = disk.area * 2.0 * J1_over_x(x);
-    }
+    double Smag = (rho_r < 1e-10) ? disk.area : 2.0 * disk.area * J1_over_x(rho_r);
     
     // A_parallel = S_magnitude * (k'·n) / |k|
     double Apar = Smag * kdotn / k;
@@ -483,13 +477,7 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
     
     // Compute S_magnitude
     double rho_r = disk.rho * r;
-    double Smag;
-    if (rho_r < 1e-10) {
-      Smag = disk.area;
-    } else {
-      double x = fmin(rho_r, 100.0);
-      Smag = disk.area * 2.0 * J1_over_x(x);
-    }
+    double Smag = (rho_r < 1e-10) ? disk.area : 2.0 * disk.area * J1_over_x(rho_r);
     
     // A_parallel = S_magnitude * (k'·n) / |k|
     double Apar = Smag * kdotn / k;
@@ -546,17 +534,9 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
     // Contribution 3: phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n)^T
     // CPU line 342: gA += phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n).transpose()
     // This term accounts for how S_magnitude changes with r, and r changes with k_prime
-    // But k_prime = A^T * k depends on A, so we need to account for ∂k_prime/∂A
-    // When differentiating k * (k_prime - kdotn * n)^T w.r.t. A:
-    //   ∂/∂A[m,n] [k[i] * (k_prime[j] - kdotn * n[j])] 
-    //   = k[i] * (∂k_prime[j]/∂A[m,n] - n[j] * ∂kdotn/∂A[m,n])
-    //   = k[i] * (k[n] * δ[j == m] - n[j] * n[m] * k[n])
-    //   = k[i] * k[n] * (δ[j == m] - n[j] * n[m])
-    // So we need an additional term: phase * dS_magnitude * k[i] * k[n] * (δ[j == m] - n[j] * n[m]) / kmag
-    // But note: the CPU code computes this with the current k_prime, and Eigen handles the chain rule.
-    // In CUDA, we need to add this term explicitly.
     double dS_magnitude;
     if (rho_r < 1e-10) {
+      // Singularity case: when rho_r is very small, use the limit
       dS_magnitude = -0.25 * disk.rho;
     } else {
       dS_magnitude = 2.0 * J1_over_x_prime(rho_r) / r;
@@ -572,7 +552,7 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
     // Main term: k * (k_prime - kdotn * n)^T (accounts for current k_prime value)
     double coeff = (kdotn / k) * dS_magnitude;
     double2 phase_coeff = cscale(phase_complex, coeff);
-    
+
     // gA(row, col) = phase_coeff * k_row * kperp_col
     for (int row = 0; row < 3; ++row) {
       double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
@@ -583,47 +563,6 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
         grad[dof_idx] = cadd(grad[dof_idx], contrib);
       }
     }
-    
-    // Additional term from chain rule: ∂k_prime/∂A
-    // The CPU code computes: gA += phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n).transpose()
-    // This gives: gA(i, j) = phase * kdotn / kmag * dS_magnitude * k[i] * (k_prime[j] - kdotn * n[j])
-    // When Eigen differentiates this w.r.t. A, it includes the chain rule term from ∂k_prime/∂A.
-    // Since k_prime = A^T * k, we have: ∂k_prime[j]/∂A[m, n] = k[n] * δ[j == m]
-    // And kdotn = k_prime · n, so: ∂kdotn/∂A[m, n] = n[m] * k[n]
-    // The additional term is: phase * kdotn / kmag * dS_magnitude * k[i] * k[n] * (δ[j == m] - n[j] * n[m])
-    // For gA(row, col) where we store A(row, col), and after transpose:
-    //   gA.transpose()(row, col) = gA(col, row)
-    //   We need: gA(col, row) += phase * kdotn / kmag * dS_magnitude * k[col] * k[n] * (δ[row == m] - n[row] * n[m])
-    //   For A(row, col), m=row, so we sum over n (the column index):
-    //   Actually, wait - the CPU code uses Eigen which automatically handles this.
-    //   The GPU code needs to match the result after Eigen's automatic differentiation.
-    //   Let me compute the term more directly: the derivative of k * (k_prime - kdotn * n)^T w.r.t. A
-    //   gives: k * k^T * (I - n * n^T) scaled by the appropriate factors.
-    //   But we need to be careful about the indexing after transpose.
-    //   Actually, I think the simplest approach is to note that the CPU code's result includes this term,
-    //   so we should add: phase * dS_magnitude / kmag * k * k^T * (I - n * n^T)
-    //   But we need to match the scaling: CPU uses kdotn/kmag, so we should use kdotn/kmag here too.
-    double additional_coeff = (kdotn / k) * dS_magnitude;
-    double2 phase_additional = cscale(phase_complex, additional_coeff);
-    
-    // Additional term: k * k^T * (I - n * n^T) / kmag
-    // This accounts for ∂k_prime/∂A where k_prime = A^T * k
-    // After transpose and mapping to our storage: gA(row, col) gets contribution from k[row] * k[col] * (δ[col == row] - n[col] * n[row])
-    for (int row = 0; row < 3; ++row) {
-      double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
-      for (int col = 0; col < 3; ++col) {
-        double k_col = (col == 0) ? kx : ((col == 1) ? ky : kz);
-        double n_col = (col == 0) ? n.x : ((col == 1) ? n.y : n.z);
-        double n_row = (row == 0) ? n.x : ((row == 1) ? n.y : n.z);
-        int dof_idx = 3 + row * 3 + col;
-        // Term: k[row] * k[col] * (δ[col == row] - n[col] * n[row])
-        double delta = (row == col) ? 1.0 : 0.0;
-        double additional_val = k_row * k_col * (delta - n_col * n_row);
-        double2 additional_contrib = cscale(phase_additional, additional_val);
-        grad[dof_idx] = cadd(grad[dof_idx], additional_contrib);
-      }
-    }
-    
   }
   
   // Write results
@@ -894,28 +833,6 @@ extern "C" __global__ void compute_A_gradient_affine_gaussian_kernel(
         int dof_idx = 3 + row * 3 + col;
         double2 contrib3 = cscale(phase_coeff3, k_row * kperp_col);
         grad[dof_idx] = cadd(grad[dof_idx], contrib3);
-      }
-    }
-    
-    // Contribution 4: Additional chain rule term for ∂k_prime/∂A
-    // Similar to disk case: k * k^T * (I - n * n^T) scaled appropriately
-    double additional_coeff = (kdotn / k) * dS_magnitude;
-    double2 phase_additional = cscale(phase_complex, additional_coeff);
-    
-    // Additional term: k * k^T * (I - n * n^T) / kmag
-    // This accounts for ∂k_prime/∂A where k_prime = A^T * k
-    for (int row = 0; row < 3; ++row) {
-      double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
-      for (int col = 0; col < 3; ++col) {
-        double k_col = (col == 0) ? kx : ((col == 1) ? ky : kz);
-        double n_col = (col == 0) ? n.x : ((col == 1) ? n.y : n.z);
-        double n_row = (row == 0) ? n.x : ((row == 1) ? n.y : n.z);
-        int dof_idx = 3 + row * 3 + col;
-        // Term: k[row] * k[col] * (δ[col == row] - n[col] * n[row])
-        double delta = (row == col) ? 1.0 : 0.0;
-        double additional_val = k_row * k_col * (delta - n_col * n_row);
-        double2 additional_contrib = cscale(phase_additional, additional_val);
-        grad[dof_idx] = cadd(grad[dof_idx], additional_contrib);
       }
     }
   }
