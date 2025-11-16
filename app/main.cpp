@@ -15,21 +15,6 @@
 
 using namespace PoIntInt;
 
-double Ak_squared_norm(double r)
-{
-  double norm;
-  if (fabs(r) < 1e-3)
-  {
-    norm = -r / 3.0 + r * r * r / 30.0;
-  }
-  else
-  {
-    norm = (cos(r) - sin(r) / r) / r;
-  }
-  norm *= 4.0 * M_PI;
-  return norm * norm;
-}
-
 int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Usage: demo <lebedev_txt_file> [Nrad]\n";
@@ -42,23 +27,6 @@ int main(int argc, char** argv) {
   Eigen::MatrixXi F;
   igl::readOFF("F:/Dropbox/3Dmodels/100 selected meshes/100 selected meshes/head2.off", V, F);
   auto geom1 = make_triangle_mesh(V, F);
-
-  //// --- Example: unit cube [0,1]^3 triangulated
-  //Eigen::MatrixXd V(8, 3); V <<
-  //  0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
-  //  0, 0, 1, 1, 0, 1, 1, 1, 1, 0, 1, 1;
-  //V *= 2;
-  //Eigen::MatrixXi F(12, 3);
-  //// faces (two tris per face), outward orientation
-  //F <<
-  //  0, 1, 2, 0, 2, 3,   // z=0
-  //  4, 7, 6, 4, 6, 5,   // z=1
-  //  0, 4, 5, 0, 5, 1,   // y=0
-  //  2, 6, 7, 2, 7, 3,   // y=1
-  //  0, 3, 7, 0, 7, 4,   // x=0
-  //  1, 5, 6, 1, 6, 2;   // x=1
-
-  //auto geom1 = make_triangle_mesh(V, F);
 
   Eigen::Vector3d t(0, 0, 0);
   Eigen::MatrixXd V2 = V;
@@ -73,22 +41,11 @@ int main(int argc, char** argv) {
   // Build k-grid (Lebedev × radial on t in [0,π/2], k=tan t)
   KGrid KG = build_kgrid(L.dirs, L.weights, Nrad);
 
-  double I_gt = 4.0 * M_PI / 3.0;
-  double I = 0.0;
-  for (int q = 0; q < KG.kmag.size(); q++)
-  {
-    I += KG.w[q] * Ak_squared_norm(KG.kmag[q]);
-  }
-  I /= 8.0 * M_PI * M_PI * M_PI;
-  printf("Computed sphere integral: %g. Ground truth: %g. Rel err: %g%%\n", I, I_gt, abs(I - I_gt) / I_gt * 100.0);
-
   // For self-intersection, pass the same mesh twice
-  auto t_start = std::chrono::high_resolution_clock::now();
-  double Vself = compute_intersection_volume_cuda(geom1, geom1, KG, 256, true);
-  auto t_end = std::chrono::high_resolution_clock::now();
-  auto compute_volume_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end - t_start).count() / 1000.0;
+  double Vcuda = compute_intersection_volume_cuda(geom1, geom1, KG, 256, true);
+  double Vcpu = compute_intersection_volume_cpu(geom1, geom1, KG, true);
   double Vgt = compute_volume_cpu(geom1, true);
-  printf("Computed volume: %g, ground truth: %g, rel err: %g%%\n", Vself, Vgt, abs(Vself - Vgt) / Vgt * 100.0);
-  printf("Time used: %g[ms]\n", compute_volume_time);
+  printf("Computed volume CUDA: %g, ground truth: %g, rel err: %g%%\n", Vcuda, Vgt, abs(Vcuda - Vgt) / Vgt * 100.0);
+  printf("Computed volume cpu+tbb: %g, ground truth: %g, rel err: %g%%\n", Vcpu, Vgt, abs(Vcpu - Vgt) / Vgt * 100.0);
   return 0;
 }
