@@ -37,17 +37,22 @@ find_package(TBB REQUIRED)
 # Function to copy TBB DLLs to target's output directory
 function(copy_tbb_dlls target)
   if(WIN32 AND TBB_FOUND)
-    # Try to get TBB library location
+    # Try to get TBB library location for both Release and Debug
+    get_target_property(TBB_LIBRARY_LOCATION_RELEASE TBB::tbb IMPORTED_LOCATION_RELEASE)
+    get_target_property(TBB_LIBRARY_LOCATION_DEBUG TBB::tbb IMPORTED_LOCATION_DEBUG)
     get_target_property(TBB_LIBRARY_LOCATION TBB::tbb IMPORTED_LOCATION)
-    if(NOT TBB_LIBRARY_LOCATION)
-      get_target_property(TBB_LIBRARY_LOCATION TBB::tbb IMPORTED_LOCATION_RELEASE)
+    
+    # Use Release location as primary, fall back to generic, then Debug
+    set(TBB_LIBRARY_LOCATION_PRIMARY "${TBB_LIBRARY_LOCATION_RELEASE}")
+    if(NOT TBB_LIBRARY_LOCATION_PRIMARY)
+      set(TBB_LIBRARY_LOCATION_PRIMARY "${TBB_LIBRARY_LOCATION}")
     endif()
-    if(NOT TBB_LIBRARY_LOCATION)
-      get_target_property(TBB_LIBRARY_LOCATION TBB::tbb IMPORTED_LOCATION_DEBUG)
+    if(NOT TBB_LIBRARY_LOCATION_PRIMARY)
+      set(TBB_LIBRARY_LOCATION_PRIMARY "${TBB_LIBRARY_LOCATION_DEBUG}")
     endif()
     
-    if(TBB_LIBRARY_LOCATION)
-      get_filename_component(TBB_LIBRARY_DIR "${TBB_LIBRARY_LOCATION}" DIRECTORY)
+    if(TBB_LIBRARY_LOCATION_PRIMARY)
+      get_filename_component(TBB_LIBRARY_DIR "${TBB_LIBRARY_LOCATION_PRIMARY}" DIRECTORY)
       
       # TBB DLLs are typically in a 'bin' or 'redist' directory at the same level as 'lib'
       # Try common locations
@@ -62,26 +67,63 @@ function(copy_tbb_dlls target)
         "${TBB_ROOT}/redist/intel64/vc_mt"
       )
       
-      # Determine build type suffix
-      set(TBB_DLL_PATTERNS)
-      if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_CONFIGURATION_TYPES)
-        list(APPEND TBB_DLL_PATTERNS "tbb*_debug.dll" "tbb*d.dll" "tbb12_debug.dll" "tbbmalloc*_debug.dll" "tbbmalloc*d.dll")
+      # For multi-config generators (like Visual Studio), copy both Debug and Release DLLs
+      # For single-config generators, copy based on CMAKE_BUILD_TYPE
+      if(CMAKE_CONFIGURATION_TYPES)
+        # Multi-config generator: copy both Debug and Release DLLs
+        set(TBB_DLL_PATTERNS_ALL
+          "tbb*.dll"           # Release DLLs
+          "tbb*_debug.dll"     # Debug DLLs
+          "tbb*d.dll"          # Debug DLLs (alternative pattern)
+          "tbb12.dll"          # Specific Release DLL
+          "tbb12_debug.dll"    # Specific Debug DLL
+          "tbbmalloc*.dll"     # Release malloc DLLs
+          "tbbmalloc*_debug.dll" # Debug malloc DLLs
+          "tbbmalloc*d.dll"    # Debug malloc DLLs (alternative pattern)
+        )
       else()
-        list(APPEND TBB_DLL_PATTERNS "tbb*.dll" "tbb12.dll" "tbbmalloc*.dll")
+        # Single-config generator: copy based on build type
+        if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+          set(TBB_DLL_PATTERNS_ALL
+            "tbb*_debug.dll"
+            "tbb*d.dll"
+            "tbb12_debug.dll"
+            "tbbmalloc*_debug.dll"
+            "tbbmalloc*d.dll"
+          )
+        else()
+          set(TBB_DLL_PATTERNS_ALL
+            "tbb*.dll"
+            "tbb12.dll"
+            "tbbmalloc*.dll"
+          )
+        endif()
       endif()
       
       # Find and copy DLLs from all possible locations
       foreach(bin_dir ${TBB_BIN_DIRS})
         if(EXISTS "${bin_dir}")
-          foreach(pattern ${TBB_DLL_PATTERNS})
+          foreach(pattern ${TBB_DLL_PATTERNS_ALL})
             file(GLOB TBB_DLLS "${bin_dir}/${pattern}")
             foreach(dll ${TBB_DLLS})
-              add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${dll}"
-                $<TARGET_FILE_DIR:${target}>
-                COMMENT "Copying TBB DLL: ${dll}"
-              )
+              # For single-config Release builds, skip debug DLLs
+              set(SHOULD_COPY TRUE)
+              if(NOT CMAKE_CONFIGURATION_TYPES)
+                if(CMAKE_BUILD_TYPE STREQUAL "Release")
+                  if(dll MATCHES "_debug\\.dll$" OR dll MATCHES "d\\.dll$")
+                    set(SHOULD_COPY FALSE)
+                  endif()
+                endif()
+              endif()
+              
+              if(SHOULD_COPY)
+                add_custom_command(TARGET ${target} POST_BUILD
+                  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                  "${dll}"
+                  $<TARGET_FILE_DIR:${target}>
+                  COMMENT "Copying TBB DLL: ${dll}"
+                )
+              endif()
             endforeach()
           endforeach()
         endif()
