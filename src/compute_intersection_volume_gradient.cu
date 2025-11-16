@@ -33,7 +33,8 @@ using PoIntInt::get_dof_type_name;
 // ∂V/∂θ₁ = (1/(8π³)) · Σ_q w_q · Re( (∂A₁(k_q)/∂θ₁) · conj(A₂(k_q)) )
 // ∂V/∂θ₂ = (1/(8π³)) · Σ_q w_q · Re( A₁(k_q) · conj(∂A₂(k_q)/∂θ₂) )
 // V = (1/(8π³)) · Σ_q w_q · Re( A₁(k_q) · conj(A₂(k_q)) )
-__global__ void compute_intersection_volume_gradient_kernel(
+// Note: This kernel is shared with compute_volume_unified.cu via CUDA separable compilation
+extern "C" __global__ void compute_intersection_volume_gradient_kernel(
   const double2* __restrict__ grad_A1,  // Q × num_dofs1: ∂A₁(k_q)/∂θ₁
   const double2* __restrict__ grad_A2,  // Q × num_dofs2: ∂A₂(k_q)/∂θ₂
   const double2* __restrict__ A1,       // Q: A₁(k_q)
