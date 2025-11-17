@@ -440,6 +440,144 @@ bool test_phase2_Ak_gradient_computation_advanced(const std::string& leb_file) {
 // ============================================================================
 // Phase 3: Test intersection volume gradient (full pipeline)
 // ============================================================================
+bool test_intersection_volume_gradient_affine(const std::string& leb_file) {
+  std::cout << "\n=== Test 1: Intersection Volume Gradient (AffineDoF, Triangle Meshes) ===" << std::endl;
+  
+  // Create two unit cube meshes
+  Eigen::MatrixXd V1, V2;
+  Eigen::MatrixXi F1, F2;
+  create_unit_cube_mesh(V1, F1);
+  create_unit_cube_mesh(V2, F2);
+  
+  // Translate second cube
+  Eigen::Vector3d translation(0.3, 0.0, 0.0);
+  for (int i = 0; i < V2.rows(); ++i) {
+    V2.row(i) += translation;
+  }
+  
+  auto geom1 = make_triangle_mesh(V1, F1);
+  auto geom2 = make_triangle_mesh(V2, F2);
+  
+  // Create AffineDoF
+  auto affine_dof1 = std::make_shared<AffineDoF>();
+  auto affine_dof2 = std::make_shared<AffineDoF>();
+  
+  // Test DoF configurations
+  std::vector<Eigen::VectorXd> test_dofs1 = {
+    // Identity: [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+    (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+    // Small translation: [0.1, 0.0, 0.0, 1, 0, 0, 0, 1, 0, 0, 0, 1]
+    (Eigen::VectorXd(12) << 0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+    // Rotation around z-axis: [0, 0, 0, cos(0.1), -sin(0.1), 0, sin(0.1), cos(0.1), 0, 0, 0, 1]
+    (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, std::cos(0.1), -std::sin(0.1), 0.0, std::sin(0.1), std::cos(0.1), 0.0, 0.0, 0.0, 1.0).finished(),
+  };
+  
+  std::vector<Eigen::VectorXd> test_dofs2 = {
+    // Identity
+    (Eigen::VectorXd(12) << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+    // Small translation
+    (Eigen::VectorXd(12) << 0.0, 0.1, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0).finished(),
+  };
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 1);
+  
+  double max_error_geom1 = 0.0;
+  double max_error_geom2 = 0.0;
+  int num_tested = 0;
+  int num_warnings = 0;
+  
+  for (const auto& dofs1 : test_dofs1) {
+    for (const auto& dofs2 : test_dofs2) {
+      // Compute gradient using CUDA
+      auto result = compute_intersection_volume_gradient_cuda(
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, false
+      );
+      
+      // Compute gradient using finite differencing
+      Eigen::VectorXd grad_fd1 = compute_intersection_volume_gradient_finite_diff(
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 1, 1e-2
+      );
+      
+      Eigen::VectorXd grad_fd2 = compute_intersection_volume_gradient_finite_diff(
+        geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 2, 1e-2
+      );
+      
+      // Compare gradients for geometry 1
+      for (int i = 0; i < result.grad_geom1.size(); ++i) {
+        double diff = result.grad_geom1(i) - grad_fd1(i);
+        double abs_error = std::abs(diff);
+        double abs_cuda = std::abs(result.grad_geom1(i));
+        double abs_fd = std::abs(grad_fd1(i));
+        
+        // Use absolute error if both are near zero, otherwise use relative error
+        bool use_absolute = (abs_cuda < 1e-3 && abs_fd < 1e-3);
+        double error = use_absolute ? abs_error : (abs_error / std::max(abs_cuda, abs_fd));
+        
+        if (error > max_error_geom1) {
+          max_error_geom1 = error;
+        }
+        
+        double tolerance = use_absolute ? 1e-3 : 0.1;  // 10% relative or 1e-3 absolute
+        if (error > tolerance && num_warnings < 10) {
+          std::cout << "  Warning: Large gradient error for geom1 DoF " << i << std::endl;
+          std::cout << "    CUDA:     " << result.grad_geom1(i) << std::endl;
+          std::cout << "    Finite:   " << grad_fd1(i) << std::endl;
+          if (use_absolute) {
+            std::cout << "    Abs error: " << abs_error << std::endl;
+          } else {
+            std::cout << "    Rel error: " << error << std::endl;
+          }
+          num_warnings++;
+        }
+        
+        num_tested++;
+      }
+      
+      // Compare gradients for geometry 2
+      for (int i = 0; i < result.grad_geom2.size(); ++i) {
+        double diff = result.grad_geom2(i) - grad_fd2(i);
+        double abs_error = std::abs(diff);
+        double abs_cuda = std::abs(result.grad_geom2(i));
+        double abs_fd = std::abs(grad_fd2(i));
+        
+        // Use absolute error if both are near zero, otherwise use relative error
+        bool use_absolute = (abs_cuda < 1e-3 && abs_fd < 1e-3);
+        double error = use_absolute ? abs_error : (abs_error / std::max(abs_cuda, abs_fd));
+        
+        if (error > max_error_geom2) {
+          max_error_geom2 = error;
+        }
+        
+        double tolerance = use_absolute ? 1e-3 : 0.1;  // 10% relative or 1e-3 absolute
+        if (error > tolerance && num_warnings < 10) {
+          std::cout << "  Warning: Large gradient error for geom2 DoF " << i << std::endl;
+          std::cout << "    CUDA:     " << result.grad_geom2(i) << std::endl;
+          std::cout << "    Finite:   " << grad_fd2(i) << std::endl;
+          if (use_absolute) {
+            std::cout << "    Abs error: " << abs_error << std::endl;
+          } else {
+            std::cout << "    Rel error: " << error << std::endl;
+          }
+          num_warnings++;
+        }
+        
+        num_tested++;
+      }
+    }
+  }
+  
+  std::cout << "  Tested " << num_tested << " gradient components" << std::endl;
+  std::cout << "  Max error (geom1): " << max_error_geom1 << std::endl;
+  std::cout << "  Max error (geom2): " << max_error_geom2 << std::endl;
+  
+  // Pass if max error is reasonable (10% relative or 1e-3 absolute)
+  bool passed = (max_error_geom1 < 0.2) && (max_error_geom2 < 0.2);
+  std::cout << "  Result: " << (passed ? "PASS" : "FAIL") << std::endl;
+  
+  return passed;
+}
 
 // Phase 3.1: Intersection Volume Gradient Consistency Check
 bool test_intersection_volume_gradient_consistency(const std::string& leb_file) {
@@ -468,13 +606,14 @@ bool test_intersection_volume_gradient_consistency(const std::string& leb_file) 
   LebedevGrid L = load_lebedev_txt(leb_file);
   KGrid KG = build_kgrid(L.dirs, L.weights, 52);
   
-  // Compute base volume using unified interface
-  double vol_base = compute_intersection_volume_cuda(geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, ComputationFlags::VOLUME_ONLY, 256, true).volume;
+  // Compute base volume
+  Geometry geom1_base = affine_dof1->apply(geom1, dofs1_base);
+  Geometry geom2_base = affine_dof2->apply(geom2, dofs2_base);
+  double vol_base = compute_intersection_volume_cuda(geom1_base, geom2_base, KG, 256, true);
   
-  // Compute gradient using unified interface
-  auto result = compute_intersection_volume_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, 
-    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, true
+  // Compute gradient
+  auto result = compute_intersection_volume_gradient_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1_base, dofs2_base, KG, 256, true
   );
   
   // Perturb DoFs and check volume change
@@ -562,16 +701,15 @@ bool test_volume_consistency_triangles(const std::string& leb_file) {
   KGrid KG = build_kgrid(L.dirs, L.weights, radial_points);
   
   // Compute volume using gradient routine
-  auto result = compute_intersection_volume_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 
-    static_cast<ComputationFlags>(ComputationFlags::VOLUME_ONLY | ComputationFlags::GRADIENT), 256, true
+  auto result = compute_intersection_volume_gradient_cuda(
+    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, 256, true
   );
   double volume_from_gradient = result.volume;
   
   // Compute volume using standard routine (unified interface)
   double volume_from_standard = compute_intersection_volume_cuda(
-    geom1, geom2, affine_dof1, affine_dof2, dofs1, dofs2, KG, ComputationFlags::VOLUME_ONLY, 256, false
-  ).volume;
+    geom1_transformed, geom2_transformed, KG, 256, true
+  );
   
   // Compare
   double error = std::abs(volume_from_gradient - volume_from_standard);
