@@ -2,6 +2,7 @@
 #include "computation_flags.hpp"
 #include <cmath>
 #include <iostream>
+#include "compute_intersection_volume_multi_object.hpp"
 
 namespace PoIntInt {
 
@@ -32,43 +33,33 @@ SimilarityResult compute_similarity(
   // Create identity DoF vector for mesh 1
   static Eigen::VectorXd identity_dofs(12);
   identity_dofs << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0;
+
+  std::vector<Geometry> geometries = { ref_geom1, ref_geom2 };
+  std::vector<std::shared_ptr<DoFParameterization>> dofs = { std::make_shared<AffineDoF>(), affine_dof };
+  std::vector<Eigen::VectorXd> dof_vector = { identity_dofs, dofs2 };
   
-  auto vol_result = compute_intersection_volume_cuda(
-    ref_geom1, ref_geom2,
-    std::make_shared<AffineDoF>(), affine_dof,  // Mesh 1: identity, Mesh 2: affine
-    identity_dofs, dofs2,  // Identity DoFs for mesh 1, affine DoFs for mesh 2
-    kgrid, vol_flags, 256, false
+  auto vol_result = compute_intersection_volume_matrix_cuda(
+    geometries, dofs, dof_vector,
+    kgrid, vol_flags, 256, true
   );
   
-  double V_int = vol_result.volume;
-  Eigen::VectorXd grad_V_int = vol_result.grad_geom2;  // Gradient w.r.t. mesh 2 DoFs
-  
-  
-  // Compute volume of mesh 2 and its gradient
-  // For self-intersection volume V(geom2, geom2), the gradient w.r.t. dofs2 is:
-  // grad_V2 = grad_geom1 + grad_geom2 (since both geometries use the same DoFs)
-  auto V2_result = compute_intersection_volume_cuda(
-    ref_geom2, ref_geom2,
-    affine_dof, affine_dof,  // Both use affine DoF
-    dofs2, dofs2,  // Both use the same DoFs
-    kgrid, vol_flags, 256, false
-  );
-  double V2 = V2_result.volume;
-  Eigen::VectorXd grad_V2 = V2_result.grad_geom1 + V2_result.grad_geom2;
-  /*double V2 = affine_dof->compute_volume(ref_geom2, dofs2);
-  Eigen::VectorXd grad_V2 = affine_dof->compute_volume_gradient(ref_geom2, dofs2);*/
+  double V_int = vol_result.volume_matrix(0, 1);
+  double V2 = vol_result.volume_matrix(1, 1);
   
   // Compute similarity measure based on type
   double similarity = 0.0;
-  Eigen::VectorXd grad_sim;
-  Eigen::MatrixXd hessian_sim;
+  Eigen::VectorXd grad_V_int, grad_V2, grad_sim;
+  Eigen::MatrixXd H_V_int, H_V2, hessian_sim;
   
   // Initialize gradient and hessian only if needed
   if (need_gradient) {
-    grad_sim = Eigen::VectorXd(12);
+    grad_V_int = vol_result.grad_matrix[1][0];
+    grad_V2 = 2.0 * vol_result.grad_matrix[1][1];
   }
   if (need_hessian) {
-    hessian_sim = Eigen::MatrixXd(12, 12);
+    H_V_int = vol_result.hessian_jj[0][1];
+    H_V2 = vol_result.hessian_ii[1][1] + vol_result.hessian_ij[1][1]
+      + vol_result.hessian_ij[1][1].transpose() + vol_result.hessian_jj[1][1];
   }
   
   if (measure == SIM_OCHIAI) {
@@ -85,10 +76,7 @@ SimilarityResult compute_similarity(
     }
     
     if (need_hessian) {
-      // Hessian computation for Ochiai (simplified - using Gauss-Newton for V_int)
-      Eigen::MatrixXd H_V_int = vol_result.hessian_geom2;
-      Eigen::MatrixXd H_V2 = V2_result.hessian_geom1 + V2_result.hessian_cross 
-        + V2_result.hessian_cross.transpose() + V2_result.hessian_geom2;
+      // Hessian computation for Ochiai
       hessian_sim = inv_denom * H_V_int;
       hessian_sim -= 0.5 * inv_denom * V_int / V2 * H_V2;
       hessian_sim += 0.75 * inv_denom * V_int / (V2 * V2) * grad_V2 * grad_V2.transpose();
@@ -108,11 +96,7 @@ SimilarityResult compute_similarity(
     }
     
     if (need_hessian) {
-      Eigen::MatrixXd H_V_int = vol_result.hessian_geom2;
-      Eigen::MatrixXd H_V2 = V2_result.hessian_geom1 + V2_result.hessian_cross
-        + V2_result.hessian_cross.transpose() + V2_result.hessian_geom2;
       // Hessian for Jaccard
-
       const Eigen::VectorXd dD = grad_V2 - grad_V_int;
 
       hessian_sim = inv_denom * H_V_int - inv_denom_sq * V_int * (H_V2 - H_V_int);
@@ -134,9 +118,6 @@ SimilarityResult compute_similarity(
     }
     
     if (need_hessian) {
-      Eigen::MatrixXd H_V_int = vol_result.hessian_geom2;
-      Eigen::MatrixXd H_V2 = V2_result.hessian_geom1 + V2_result.hessian_cross
-        + V2_result.hessian_cross.transpose() + V2_result.hessian_geom2;
       hessian_sim = inv_denom * H_V_int + coeff * H_V2;
       hessian_sim -= inv_denom / denom * (grad_V_int * grad_V2.transpose()
         + grad_V2 * grad_V_int.transpose());
