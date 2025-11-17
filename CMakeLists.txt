@@ -279,6 +279,41 @@ if(BUILD_EXE)
     )
     copy_tbb_dlls(poIntInt_visualize)
   endif()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/align/main.cpp")
+    # Main executable with all source files
+    add_executable(poIntInt_align
+      app/align/main.cpp
+      app/align/similarity_measure.cpp
+      app/align/optimizer.cpp
+      app/align/warm_start.cpp
+    )
+    target_link_libraries(poIntInt_align PRIVATE poIntInt_core)
+    target_include_directories(poIntInt_align PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/app/align"
+    )
+    
+    # Define POINTINT_SOURCE_DIR for finding data directory
+    get_filename_component(CMAKE_CURRENT_SOURCE_DIR_NORMALIZED "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
+    string(REPLACE "\\" "/" CMAKE_CURRENT_SOURCE_DIR_NORMALIZED "${CMAKE_CURRENT_SOURCE_DIR_NORMALIZED}")
+    target_compile_definitions(poIntInt_align PRIVATE 
+      POINTINT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR_NORMALIZED}")
+    
+    # Link libigl if available
+    if(TARGET igl::glfw)
+      target_link_libraries(poIntInt_align PRIVATE igl::glfw)
+    endif()
+    if(TARGET igl::imgui)
+      target_link_libraries(poIntInt_align PUBLIC igl::imgui)
+    endif()
+    
+    set_target_properties(poIntInt_align PROPERTIES
+      CUDA_SEPARABLE_COMPILATION ON
+      CUDA_RESOLVE_DEVICE_SYMBOLS ON
+      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
+      FOLDER "app"
+    )
+    copy_tbb_dlls(poIntInt_align)
+  endif()
 endif()
 
 # ---- Unit Tests ----
