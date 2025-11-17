@@ -1,0 +1,72 @@
+#include "dof/cuda/dof_cuda_interface.hpp"
+#include "dof/affine_dof.hpp"
+#include "dof/triangle_mesh_dof.hpp"
+#include <unordered_map>
+#include <mutex>
+#include <memory>
+
+namespace PoIntInt {
+
+// Thread-safe registry using function-local static to ensure proper initialization order
+// This uses Meyers' singleton pattern to avoid static initialization order issues
+static std::unordered_map<std::string, std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>>& 
+  get_registry() {
+  static std::unordered_map<std::string, std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>> registry;
+  return registry;
+}
+
+static std::mutex& get_registry_mutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+void CudaKernelRegistry::register_kernels(
+  const std::string& dof_type,
+  GeometryType geom_type,
+  CudaComputeAkFunc compute_Ak,
+  CudaComputeAkGradientFunc compute_Ak_gradient)
+{
+  std::lock_guard<std::mutex> lock(get_registry_mutex());
+  std::string key = make_key(dof_type, geom_type);
+  get_registry()[key] = std::make_pair(compute_Ak, compute_Ak_gradient);
+}
+
+bool CudaKernelRegistry::has_kernels(const std::string& dof_type, GeometryType geom_type) {
+  std::lock_guard<std::mutex> lock(get_registry_mutex());
+  std::string key = make_key(dof_type, geom_type);
+  return get_registry().find(key) != get_registry().end();
+}
+
+std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc>
+CudaKernelRegistry::get_kernels(const std::string& dof_type, GeometryType geom_type) {
+  std::lock_guard<std::mutex> lock(get_registry_mutex());
+  std::string key = make_key(dof_type, geom_type);
+  auto& registry = get_registry();
+  auto it = registry.find(key);
+  if (it != registry.end()) {
+    return it->second;
+  }
+  return std::make_pair(CudaComputeAkFunc(), CudaComputeAkGradientFunc());
+}
+
+std::string CudaKernelRegistry::make_key(const std::string& dof_type, GeometryType geom_type) {
+  const char* geom_names[] = {"Triangle", "Disk", "Gaussian"};
+  return dof_type + "_" + std::string(geom_names[geom_type]);
+}
+
+std::string get_dof_type_name(const std::shared_ptr<DoFParameterization>& dof) {
+  if (!dof) return "Unknown";
+  
+  // Try to identify the concrete type using dynamic_cast
+  if (std::dynamic_pointer_cast<AffineDoF>(dof)) {
+    return "AffineDoF";
+  } else if (std::dynamic_pointer_cast<TriangleMeshDoF>(dof)) {
+    return "TriangleMeshDoF";
+  }
+  
+  // Fallback: use typeid (less reliable but works for unknown types)
+  return "Unknown";
+}
+
+} // namespace PoIntInt
+

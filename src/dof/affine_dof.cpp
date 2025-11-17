@@ -52,80 +52,6 @@ Eigen::Matrix3d AffineDoF::cross_product_matrix(const Eigen::Vector3d& v) {
   return cp;
 }
 
-Geometry AffineDoF::apply(const Geometry& geom, const Eigen::VectorXd& dofs) const {
-  auto [A, t] = build_affine_transform(dofs);
-  double det_A = A.determinant();
-  
-  Geometry transformed = geom;
-  
-  if (geom.type == GEOM_TRIANGLE) {
-    // Transform triangles: vertices -> A*vertex + t
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, transformed.tris.size()),
-      [&](const tbb::blocked_range<size_t>& r) {
-        for (size_t i = r.begin(); i < r.end(); ++i) {
-          auto& tri = transformed.tris[i];
-          Eigen::Vector3d a = A * Eigen::Vector3d(tri.a.x, tri.a.y, tri.a.z) + t;
-          Eigen::Vector3d e1 = A * Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z);
-          Eigen::Vector3d e2 = A * Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z);
-          Eigen::Vector3d S = 0.5 * e1.cross(e2);
-          
-          tri.a = make_float3((float)a.x(), (float)a.y(), (float)a.z());
-          tri.e1 = make_float3((float)e1.x(), (float)e1.y(), (float)e1.z());
-          tri.e2 = make_float3((float)e2.x(), (float)e2.y(), (float)e2.z());
-          tri.S = make_float3((float)S.x(), (float)S.y(), (float)S.z());
-        }
-      });
-  } else if (geom.type == GEOM_DISK) {
-    // Transform disks: center -> A*center + t, normal -> A*normal (normalized)
-    double scale_factor = std::pow(std::abs(det_A), 1.0/3.0);
-    double area_scale = std::abs(det_A) / scale_factor;
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, transformed.disks.size()),
-      [&](const tbb::blocked_range<size_t>& r) {
-        for (size_t i = r.begin(); i < r.end(); ++i) {
-          auto& disk = transformed.disks[i];
-          Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
-          Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
-          
-          c = A * c + t;
-          n = A * n;
-          n.normalize();
-          
-          // Scale radius by average scale factor (geometric mean of scale factors)
-          disk.rho *= (float)scale_factor;
-          disk.area *= (float)area_scale;  // Adjust area
-          
-          disk.c = make_float3((float)c.x(), (float)c.y(), (float)c.z());
-          disk.n = make_float3((float)n.x(), (float)n.y(), (float)n.z());
-        }
-      });
-  } else if (geom.type == GEOM_GAUSSIAN) {
-    // Transform Gaussian splats: center -> A*center + t, normal -> A*normal (normalized)
-    double scale_factor = std::pow(std::abs(det_A), 1.0/3.0);
-    double weight_scale = std::abs(det_A) / scale_factor;
-    tbb::parallel_for(tbb::blocked_range<size_t>(0, transformed.gaussians.size()),
-      [&](const tbb::blocked_range<size_t>& r) {
-        for (size_t i = r.begin(); i < r.end(); ++i) {
-          auto& gauss = transformed.gaussians[i];
-          Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
-          Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
-          
-          c = A * c + t;
-          n = A * n;
-          n.normalize();
-          
-          // Scale sigma by average scale factor
-          gauss.sigma *= (float)scale_factor;
-          gauss.w *= (float)weight_scale;  // Adjust weight
-          
-          gauss.c = make_float3((float)c.x(), (float)c.y(), (float)c.z());
-          gauss.n = make_float3((float)n.x(), (float)n.y(), (float)n.z());
-        }
-      });
-  }
-  
-  return transformed;
-}
-
 std::complex<double> AffineDoF::compute_A(
   const Geometry& geom,
   const Eigen::Vector3d& k,
@@ -393,6 +319,68 @@ Eigen::VectorXcd AffineDoF::compute_A_gradient(
   }
   
   return grad;
+}
+
+double AffineDoF::compute_volume(
+  const Geometry& geom,
+  const Eigen::VectorXd& dofs) const
+{
+  auto [A, t] = build_affine_transform(dofs);
+  double det_A = A.determinant();
+
+  // Compute base volume (volume of reference geometry)
+  // For triangle meshes: V = (1/3) * Σ_triangles (a · S)
+  double V_base = 0.0;
+  if (geom.type == GEOM_TRIANGLE) {
+    V_base = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.tris.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& tri = geom.tris[i];
+          Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
+          Eigen::Vector3d S(tri.S.x, tri.S.y, tri.S.z);
+          local_sum += a.dot(S);
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    V_base /= 3.0;
+  }
+  else if (geom.type == GEOM_DISK) {
+    V_base = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.disks.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& disk = geom.disks[i];
+          Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
+          Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
+          local_sum += c.dot(n) * disk.area;
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    V_base /= 3.0;
+  }
+  else if (geom.type == GEOM_GAUSSIAN) {
+    V_base = tbb::parallel_reduce(
+      tbb::blocked_range<size_t>(0, geom.gaussians.size()),
+      0.0,
+      [&](const tbb::blocked_range<size_t>& r, double local_sum) -> double {
+        for (size_t i = r.begin(); i < r.end(); ++i) {
+          const auto& gauss = geom.gaussians[i];
+          Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
+          Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
+          local_sum += c.dot(n) * gauss.w;
+        }
+        return local_sum;
+      },
+      std::plus<double>());
+    V_base /= 3.0;
+  }
+
+  return V_base * abs(det_A);
 }
 
 Eigen::VectorXd AffineDoF::compute_volume_gradient(

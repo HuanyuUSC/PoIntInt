@@ -1,5 +1,6 @@
 #include "dof/affine_dof_decomposed.hpp"
 #include "form_factor_helpers.hpp"
+#include "element_functions.hpp"
 #include "geometry/packing.hpp"
 #include <cuda_runtime.h>
 #include <cassert>
@@ -71,71 +72,96 @@ std::pair<Eigen::Matrix3d, Eigen::Vector3d> AffineDoF_Decomposed::build_affine_t
   return std::make_pair(A, t);
 }
 
-Geometry AffineDoF_Decomposed::apply(const Geometry& geom, const Eigen::VectorXd& dofs) const {
+std::complex<double> AffineDoF_Decomposed::compute_A(
+  const Geometry& geom,
+  const Eigen::Vector3d& k,
+  const Eigen::VectorXd& dofs) const
+{
   auto [A, t] = build_affine_transform(dofs);
-  double det_A = A.determinant();
+
+  std::complex<double> Ak(0.0, 0.0);
+
+  double kmag = k.norm();
+  if (kmag < 1e-10) return Ak; // A(0) = 0
+
+  const Eigen::Vector3d khat = k / kmag;
   
-  Geometry transformed = geom;
-  
+  // the imaginary unit
+  static const std::complex<double> I(0.0, 1.0);
+
   if (geom.type == GEOM_TRIANGLE) {
-    // Transform triangles: vertices -> A*vertex + t
-    for (auto& tri : transformed.tris) {
+    // For each triangle, compute A(k) contribution
+    for (size_t i = 0; i < geom.tris.size(); ++i) {
+      const auto& tri = geom.tris[i];
       Eigen::Vector3d a(tri.a.x, tri.a.y, tri.a.z);
-      Eigen::Vector3d b = a + Eigen::Vector3d(tri.e1.x, tri.e1.y, tri.e1.z);
-      Eigen::Vector3d c = a + Eigen::Vector3d(tri.e2.x, tri.e2.y, tri.e2.z);
-      
-      a = A * a + t;
-      b = A * b + t;
-      c = A * c + t;
-      
-      Eigen::Vector3d e1 = b - a;
-      Eigen::Vector3d e2 = c - a;
-      Eigen::Vector3d S = 0.5 * e1.cross(e2);
-      
-      tri.a = make_float3((float)a.x(), (float)a.y(), (float)a.z());
-      tri.e1 = make_float3((float)e1.x(), (float)e1.y(), (float)e1.z());
-      tri.e2 = make_float3((float)e2.x(), (float)e2.y(), (float)e2.z());
-      tri.S = make_float3((float)S.x(), (float)S.y(), (float)S.z());
-    }
-  } else if (geom.type == GEOM_DISK) {
-    // Transform disks: center -> A*center + t, normal -> A*normal (normalized)
-    for (auto& disk : transformed.disks) {
-      Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
-      Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
-      
-      c = A * c + t;
-      n = A * n;
-      n.normalize();
-      
-      // Scale radius by average scale factor (geometric mean of scale factors)
-      double scale_factor = std::pow(std::abs(det_A), 1.0/3.0);
-      disk.rho *= (float)scale_factor;
-      disk.area *= (float)(std::abs(det_A) / scale_factor);  // Adjust area
-      
-      disk.c = make_float3((float)c.x(), (float)c.y(), (float)c.z());
-      disk.n = make_float3((float)n.x(), (float)n.y(), (float)n.z());
-    }
-  } else if (geom.type == GEOM_GAUSSIAN) {
-    // Transform Gaussian splats: center -> A*center + t, normal -> A*normal (normalized)
-    for (auto& gauss : transformed.gaussians) {
-      Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
-      Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
-      
-      c = A * c + t;
-      n = A * n;
-      n.normalize();
-      
-      // Scale sigma by average scale factor
-      double scale_factor = std::pow(std::abs(det_A), 1.0/3.0);
-      gauss.sigma *= (float)scale_factor;
-      gauss.w *= (float)(std::abs(det_A) / scale_factor);  // Adjust weight
-      
-      gauss.c = make_float3((float)c.x(), (float)c.y(), (float)c.z());
-      gauss.n = make_float3((float)n.x(), (float)n.y(), (float)n.z());
+      Eigen::Vector3d e1(tri.e1.x, tri.e1.y, tri.e1.z);
+      Eigen::Vector3d e2(tri.e2.x, tri.e2.y, tri.e2.z);
+
+      // Transformed quantities
+      Eigen::Vector3d a_prime = A * a + t;
+      Eigen::Vector3d e1_prime = A * e1;
+      Eigen::Vector3d e2_prime = A * e2;
+      Eigen::Vector3d S_prime = 0.5 * e1_prime.cross(e2_prime);
+
+      // Compute A(k) for transformed triangle
+      double alpha_prime = k.dot(e1_prime);
+      double beta_prime = k.dot(e2_prime);
+      double gamma_prime = khat.dot(S_prime);
+
+      std::complex<double> phi_prime = Triangle_Phi_ab(alpha_prime, beta_prime);
+      std::complex<double> phase_prime = std::exp(I * k.dot(a_prime));
+      Ak += phase_prime * phi_prime * gamma_prime;
     }
   }
-  
-  return transformed;
+  else if (geom.type == GEOM_DISK) {
+    // For each disk, compute A(k) contribution
+    for (size_t i = 0; i < geom.disks.size(); ++i) {
+      const auto& disk = geom.disks[i];
+      Eigen::Vector3d c(disk.c.x, disk.c.y, disk.c.z);
+      Eigen::Vector3d n(disk.n.x, disk.n.y, disk.n.z);
+
+      // Transformed quantities
+      Eigen::Vector3d c_prime = A * c + t;
+      Eigen::Vector3d k_prime = A.transpose() * k;
+
+      double kdotn = k_prime.dot(n);
+      double r2 = std::max(0.0, k_prime.squaredNorm() - kdotn * kdotn);
+      double r = std::sqrt(r2);
+
+      double rho_r = disk.rho * r;
+      double S_magnitude = (rho_r < 1e-10) ? disk.area : 2.0 * disk.area * Disk_J1_over_x(rho_r);
+      double A_parallel_mag = S_magnitude * kdotn / kmag;
+
+      std::complex<double> phase = std::exp(k.dot(c_prime) * I);
+
+      Ak += phase * A_parallel_mag;
+    }
+  }
+  else if (geom.type == GEOM_GAUSSIAN) {
+    // For each Gaussian surfel, compute A(k) contribution
+    for (size_t i = 0; i < geom.gaussians.size(); ++i) {
+      const auto& gauss = geom.gaussians[i];
+      Eigen::Vector3d c(gauss.c.x, gauss.c.y, gauss.c.z);
+      Eigen::Vector3d n(gauss.n.x, gauss.n.y, gauss.n.z);
+
+      // Transformed quantities
+      Eigen::Vector3d c_prime = A * c + t;
+      Eigen::Vector3d k_prime = A.transpose() * k;
+
+      double kdotn = k_prime.dot(n);
+      double r2 = k_prime.squaredNorm() - kdotn * kdotn;
+
+      double exp_arg = -0.5 * gauss.sigma * gauss.sigma * r2;
+      double S_magnitude = gauss.w * std::exp(exp_arg);
+      double A_parallel_mag = S_magnitude * kdotn / kmag;
+
+      std::complex<double> phase = std::exp(k.dot(c_prime) * I);
+
+      Ak += phase * A_parallel_mag;
+    }
+  }
+
+  return Ak;
 }
 
 Eigen::VectorXcd AffineDoF_Decomposed::compute_A_gradient(
@@ -143,7 +169,7 @@ Eigen::VectorXcd AffineDoF_Decomposed::compute_A_gradient(
   const Eigen::Vector3d& k,
   const Eigen::VectorXd& dofs) const
 {
-  // Compute gradient using finite differencing by directly transforming geometry
+  // Compute gradient using finite differencing by calling compute_A directly
   // Use central differences for better accuracy
   Eigen::VectorXcd grad(12);
   double eps = 1e-6;
@@ -152,14 +178,12 @@ Eigen::VectorXcd AffineDoF_Decomposed::compute_A_gradient(
     // Forward difference
     Eigen::VectorXd dofs_plus = dofs;
     dofs_plus(i) += eps;
-    Geometry geom_plus = apply(geom, dofs_plus);
-    std::complex<double> A_plus = compute_A_geometry(geom_plus, k);
+    std::complex<double> A_plus = compute_A(geom, k, dofs_plus);
     
     // Backward difference
     Eigen::VectorXd dofs_minus = dofs;
     dofs_minus(i) -= eps;
-    Geometry geom_minus = apply(geom, dofs_minus);
-    std::complex<double> A_minus = compute_A_geometry(geom_minus, k);
+    std::complex<double> A_minus = compute_A(geom, k, dofs_minus);
     
     // Central difference: (f(x+h) - f(x-h)) / (2h)
     grad(i) = (A_plus - A_minus) / (2.0 * eps);
