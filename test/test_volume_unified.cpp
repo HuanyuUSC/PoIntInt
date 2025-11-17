@@ -14,10 +14,12 @@
 #include "geometry/geometry_helpers.hpp"
 #include "geometry/geometry.hpp"
 #include "compute_intersection_volume.hpp"
+#include "compute_intersection_volume_multi_object.hpp"
 #include "compute_volume.hpp"
 #include "quadrature/lebedev_io.hpp"
 #include "quadrature/kgrid.hpp"
 #include "form_factor_helpers.hpp"
+#include "computation_flags.hpp"
 
 using namespace PoIntInt;
 
@@ -905,6 +907,320 @@ bool test_intersection_volume_triangle_mesh_dof(const std::string& leb_file) {
 }
 
 // ============================================================================
+// Multi-Object Tests
+// ============================================================================
+
+// Compute gradient of volume matrix entry V[i,j] w.r.t. DoFs of object i using finite differencing
+Eigen::VectorXd compute_volume_matrix_gradient_finite_diff_i(
+  const std::vector<Geometry>& ref_geometries,
+  const std::vector<std::shared_ptr<DoFParameterization>>& dofs,
+  std::vector<Eigen::VectorXd> dof_vectors,
+  const KGrid& kgrid,
+  int i,
+  int j,
+  double eps = 1e-5)
+{
+  int n_dofs_i = dofs[i]->num_dofs();
+  Eigen::VectorXd grad_i(n_dofs_i);
+  
+  // Compute gradient using 5-point stencil
+  for (int dof_idx = 0; dof_idx < n_dofs_i; ++dof_idx) {
+    std::vector<Eigen::VectorXd> dof_vectors_p2 = dof_vectors;
+    std::vector<Eigen::VectorXd> dof_vectors_p1 = dof_vectors;
+    std::vector<Eigen::VectorXd> dof_vectors_m1 = dof_vectors;
+    std::vector<Eigen::VectorXd> dof_vectors_m2 = dof_vectors;
+    
+    dof_vectors_p2[i](dof_idx) += 2.0 * eps;
+    dof_vectors_p1[i](dof_idx) += eps;
+    dof_vectors_m1[i](dof_idx) -= eps;
+    dof_vectors_m2[i](dof_idx) -= 2.0 * eps;
+    
+    double V_p2 = compute_intersection_volume_matrix_cuda(
+      ref_geometries, dofs, dof_vectors_p2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume_matrix(i, j);
+    double V_p1 = compute_intersection_volume_matrix_cuda(
+      ref_geometries, dofs, dof_vectors_p1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume_matrix(i, j);
+    double V_m1 = compute_intersection_volume_matrix_cuda(
+      ref_geometries, dofs, dof_vectors_m1, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume_matrix(i, j);
+    double V_m2 = compute_intersection_volume_matrix_cuda(
+      ref_geometries, dofs, dof_vectors_m2, kgrid, ComputationFlags::VOLUME_ONLY, 256, false).volume_matrix(i, j);
+    
+    grad_i(dof_idx) = (-V_p2 + 8.0 * V_p1 - 8.0 * V_m1 + V_m2) / (12.0 * eps);
+  }
+  
+  return grad_i;
+}
+
+// Test multi-object intersection volume matrix (CPU vs GPU vs FD)
+bool test_multi_object_intersection_volume_comprehensive(const std::string& leb_file) {
+  std::cout << "\n=== Test: Multi-Object Intersection Volume Comprehensive ===" << std::endl;
+  
+  // Create geometries: 1 mesh, 1 point cloud, 1 Gaussian splat
+  std::vector<Geometry> geometries;
+  std::vector<std::shared_ptr<DoFParameterization>> dofs;
+  std::vector<Eigen::VectorXd> dof_vectors;
+  
+  // Object 0: Unit cube mesh
+  Eigen::MatrixXd V1;
+  Eigen::MatrixXi F1;
+  create_unit_cube_mesh(V1, F1);
+  geometries.push_back(make_triangle_mesh(V1, F1));
+  dofs.push_back(std::make_shared<AffineDoF>());
+  Eigen::VectorXd dofs0(12);
+  dofs0 << 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0;
+  dof_vectors.push_back(dofs0);
+  
+  // Object 1: Unit sphere point cloud
+  Eigen::MatrixXd P1, N1;
+  Eigen::VectorXd radii1;
+  create_sphere_pointcloud(P1, N1, radii1, 500);
+  // Translate sphere
+  Eigen::Vector3d translation1(0.5, 0.0, 0.0);
+  for (int i = 0; i < P1.rows(); ++i) {
+    P1.row(i) += translation1;
+  }
+  geometries.push_back(make_point_cloud(P1, N1, radii1, true));
+  dofs.push_back(std::make_shared<AffineDoF>());
+  Eigen::VectorXd dofs1(12);
+  dofs1 << 0.1, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0;
+  dof_vectors.push_back(dofs1);
+  
+  // Object 2: Unit sphere Gaussian splat
+  Eigen::MatrixXd P2, N2;
+  Eigen::VectorXd sigmas2, weights2;
+  create_sphere_gaussians(P2, N2, sigmas2, weights2, 500);
+  // Translate Gaussian splat
+  Eigen::Vector3d translation2(0.0, 0.5, 0.0);
+  for (int i = 0; i < P2.rows(); ++i) {
+    P2.row(i) += translation2;
+  }
+  geometries.push_back(make_gaussian_splat(P2, N2, sigmas2, weights2));
+  dofs.push_back(std::make_shared<AffineDoF>());
+  Eigen::VectorXd dofs2(12);
+  dofs2 << 0.0, 0.1, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0;
+  dof_vectors.push_back(dofs2);
+  
+  int num_objects = 3;
+  
+  // Load Lebedev grid
+  LebedevGrid L = load_lebedev_txt(leb_file);
+  KGrid KG = build_kgrid(L.dirs, L.weights, 16);
+  
+  // ========== Part 1: CPU vs GPU (Volume Matrix) ==========
+  std::cout << "  Part 1: CPU vs GPU (Volume Matrix)..." << std::endl;
+  
+  auto t_cpu_start = std::chrono::high_resolution_clock::now();
+  auto result_cpu = compute_intersection_volume_matrix_cpu(
+    geometries, dofs, dof_vectors, KG, ComputationFlags::VOLUME_ONLY, false);
+  auto t_cpu_end = std::chrono::high_resolution_clock::now();
+  double cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
+  
+  auto t_gpu_start = std::chrono::high_resolution_clock::now();
+  auto result_gpu = compute_intersection_volume_matrix_cuda(
+    geometries, dofs, dof_vectors, KG, ComputationFlags::VOLUME_ONLY, 256, false);
+  auto t_gpu_end = std::chrono::high_resolution_clock::now();
+  double gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
+  
+  // Compare volume matrices
+  double max_vol_error = 0.0;
+  double max_vol_rel_error = 0.0;
+  for (int i = 0; i < num_objects; ++i) {
+    for (int j = 0; j < num_objects; ++j) {
+      double vol_error = std::abs(result_cpu.volume_matrix(i, j) - result_gpu.volume_matrix(i, j));
+      double vol_rel_error = vol_error / std::max(std::abs(result_cpu.volume_matrix(i, j)), 1e-10);
+      max_vol_error = std::max(max_vol_error, vol_error);
+      max_vol_rel_error = std::max(max_vol_rel_error, vol_rel_error);
+    }
+  }
+  
+  std::cout << "    CPU volume matrix:" << std::endl;
+  std::cout << result_cpu.volume_matrix << std::endl;
+  std::cout << "    GPU volume matrix:" << std::endl;
+  std::cout << result_gpu.volume_matrix << std::endl;
+  std::cout << "    Max absolute error: " << max_vol_error << std::endl;
+  std::cout << "    Max relative error: " << max_vol_rel_error << std::endl;
+  std::cout << "    CPU time: " << cpu_time << " ms" << std::endl;
+  std::cout << "    GPU time: " << gpu_time << " ms" << std::endl;
+  std::cout << "    Speedup: " << (cpu_time / std::max(gpu_time, 0.001)) << "x" << std::endl;
+  
+  // ========== Part 2: CPU vs GPU (Gradients) ==========
+  std::cout << "  Part 2: CPU vs GPU (Gradients)..." << std::endl;
+  
+  ComputationFlags grad_flags = static_cast<ComputationFlags>(
+    static_cast<int>(ComputationFlags::VOLUME_ONLY) | static_cast<int>(ComputationFlags::GRADIENT));
+  
+  t_cpu_start = std::chrono::high_resolution_clock::now();
+  auto result_cpu_grad = compute_intersection_volume_matrix_cpu(
+    geometries, dofs, dof_vectors, KG, grad_flags, false);
+  t_cpu_end = std::chrono::high_resolution_clock::now();
+  cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
+  
+  t_gpu_start = std::chrono::high_resolution_clock::now();
+  auto result_gpu_grad = compute_intersection_volume_matrix_cuda(
+    geometries, dofs, dof_vectors, KG, grad_flags, 256, false);
+  t_gpu_end = std::chrono::high_resolution_clock::now();
+  gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
+  
+  // Compare gradients
+  double max_grad_error = 0.0;
+  for (int i = 0; i < num_objects; ++i) {
+    for (int j = 0; j < num_objects; ++j) {
+      if (!result_cpu_grad.grad_matrix.empty() && !result_gpu_grad.grad_matrix.empty()) {
+        double grad_error = (result_cpu_grad.grad_matrix[i][j] - result_gpu_grad.grad_matrix[i][j]).norm();
+        max_grad_error = std::max(max_grad_error, grad_error);
+      }
+    }
+  }
+  
+  std::cout << "    Max gradient error (CPU vs GPU): " << max_grad_error << std::endl;
+  std::cout << "    CPU time: " << cpu_time << " ms" << std::endl;
+  std::cout << "    GPU time: " << gpu_time << " ms" << std::endl;
+  std::cout << "    Speedup: " << (cpu_time / std::max(gpu_time, 0.001)) << "x" << std::endl;
+  
+  // ========== Part 3: GPU vs Finite Differencing (Gradients) ==========
+  std::cout << "  Part 3: GPU vs Finite Differencing (Gradients)..." << std::endl;
+  std::cout << "    Computing finite difference gradients (this may take a while)..." << std::endl;
+  
+  // Test a few key pairs to avoid excessive computation
+  std::vector<std::pair<int, int>> test_pairs = {{0, 1}, {0, 2}, {1, 2}, {0, 0}, {1, 1}, {2, 2}};
+  
+  double max_grad_fd_error = 0.0;
+  int num_tested = 0;
+  
+  for (const auto& pair : test_pairs) {
+    int i = pair.first;
+    int j = pair.second;
+    
+    if (result_gpu_grad.grad_matrix.empty() || result_gpu_grad.grad_matrix[i].empty()) {
+      continue;
+    }
+    
+    // Compute finite difference gradient w.r.t. DoFs of object i
+    Eigen::VectorXd grad_fd_i = compute_volume_matrix_gradient_finite_diff_i(
+      geometries, dofs, dof_vectors, KG, i, j, 1e-5);
+    
+    // For diagonal entries, V[i,i] gradient is 2 * grad_matrix[i][i]
+    Eigen::VectorXd grad_gpu_effective = (i == j)
+      ? 2.0 * result_gpu_grad.grad_matrix[i][j]
+      : result_gpu_grad.grad_matrix[i][j];
+    
+    // Compare with GPU gradient
+    double grad_error_i = (grad_gpu_effective - grad_fd_i).norm();
+    double max_component_error_i = (grad_gpu_effective - grad_fd_i).cwiseAbs().maxCoeff();
+    
+    std::cout << "    Pair (" << i << "," << j << ") - Gradient w.r.t. object " << i << ":" << std::endl;
+    std::cout << "      GPU norm (effective): " << grad_gpu_effective.norm() << std::endl;
+    std::cout << "      FD norm: " << grad_fd_i.norm() << std::endl;
+    std::cout << "      Error (norm): " << grad_error_i << std::endl;
+    std::cout << "      Max component error: " << max_component_error_i << std::endl;
+    
+    max_grad_fd_error = std::max(max_grad_fd_error, max_component_error_i);
+    num_tested++;
+  }
+  
+  std::cout << "    Tested " << num_tested << " gradient pairs" << std::endl;
+  std::cout << "    Max component error (GPU vs FD): " << max_grad_fd_error << std::endl;
+  
+  // ========== Part 4: CPU vs Finite Differencing (Gradients) ==========
+  std::cout << "  Part 4: CPU vs Finite Differencing (Gradients)..." << std::endl;
+  
+  double max_grad_cpu_fd_error = 0.0;
+  
+  for (const auto& pair : test_pairs) {
+    int i = pair.first;
+    int j = pair.second;
+    
+    if (result_cpu_grad.grad_matrix.empty() || result_cpu_grad.grad_matrix[i].empty()) {
+      continue;
+    }
+    
+    // Compute finite difference gradient w.r.t. DoFs of object i
+    Eigen::VectorXd grad_fd_i = compute_volume_matrix_gradient_finite_diff_i(
+      geometries, dofs, dof_vectors, KG, i, j, 1e-5);
+    
+    // Compare with CPU gradient
+    Eigen::VectorXd grad_cpu_effective = (i == j)
+      ? 2.0 * result_cpu_grad.grad_matrix[i][j]
+      : result_cpu_grad.grad_matrix[i][j];
+    
+    double grad_error_i = (grad_cpu_effective - grad_fd_i).norm();
+    double max_component_error_i = (grad_cpu_effective - grad_fd_i).cwiseAbs().maxCoeff();
+    
+    std::cout << "    Pair (" << i << "," << j << ") - Gradient w.r.t. object " << i << ":" << std::endl;
+    std::cout << "      CPU norm (effective): " << grad_cpu_effective.norm() << std::endl;
+    std::cout << "      FD norm: " << grad_fd_i.norm() << std::endl;
+    std::cout << "      Error (norm): " << grad_error_i << std::endl;
+    std::cout << "      Max component error: " << max_component_error_i << std::endl;
+    
+    max_grad_cpu_fd_error = std::max(max_grad_cpu_fd_error, max_component_error_i);
+  }
+  
+  std::cout << "    Max component error (CPU vs FD): " << max_grad_cpu_fd_error << std::endl;
+  
+  // ========== Part 5: CPU vs GPU (Hessians) ==========
+  std::cout << "  Part 5: CPU vs GPU (Hessians)..." << std::endl;
+  
+  ComputationFlags hess_flags = ComputationFlags::ALL;
+  
+  t_cpu_start = std::chrono::high_resolution_clock::now();
+  auto result_cpu_hess = compute_intersection_volume_matrix_cpu(
+    geometries, dofs, dof_vectors, KG, hess_flags, false);
+  t_cpu_end = std::chrono::high_resolution_clock::now();
+  cpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_cpu_end - t_cpu_start).count() / 1000.0;
+  
+  t_gpu_start = std::chrono::high_resolution_clock::now();
+  auto result_gpu_hess = compute_intersection_volume_matrix_cuda(
+    geometries, dofs, dof_vectors, KG, hess_flags, 256, false);
+  t_gpu_end = std::chrono::high_resolution_clock::now();
+  gpu_time = std::chrono::duration_cast<std::chrono::microseconds>(t_gpu_end - t_gpu_start).count() / 1000.0;
+  
+  double max_hessian_error = 0.0;
+  for (int i = 0; i < num_objects; ++i) {
+    for (int j = 0; j < num_objects; ++j) {
+      if (!result_cpu_hess.hessian_ij.empty() && !result_gpu_hess.hessian_ij.empty()) {
+        Eigen::MatrixXd diff_ij = result_cpu_hess.hessian_ij[i][j] - result_gpu_hess.hessian_ij[i][j];
+        double error_norm = diff_ij.norm();
+        max_hessian_error = std::max(max_hessian_error, error_norm);
+      }
+      // hessian_ii and hessian_jj should both be zero for Gauss-Newton
+      double cpu_hii_norm = result_cpu_hess.hessian_ii[i][j].norm();
+      double gpu_hii_norm = result_gpu_hess.hessian_ii[i][j].norm();
+      double cpu_hjj_norm = result_cpu_hess.hessian_jj[i][j].norm();
+      double gpu_hjj_norm = result_gpu_hess.hessian_jj[i][j].norm();
+      if (cpu_hii_norm > 1e-9 || gpu_hii_norm > 1e-9 ||
+          cpu_hjj_norm > 1e-9 || gpu_hjj_norm > 1e-9) {
+        std::cout << "    Warning: Non-zero diagonal Hessian detected at (" << i << "," << j << ")" << std::endl;
+        std::cout << "      CPU H_ii norm: " << cpu_hii_norm << ", GPU H_ii norm: " << gpu_hii_norm << std::endl;
+        std::cout << "      CPU H_jj norm: " << cpu_hjj_norm << ", GPU H_jj norm: " << gpu_hjj_norm << std::endl;
+      }
+    }
+  }
+  
+  std::cout << "    Max Hessian cross-term error (CPU vs GPU): " << max_hessian_error << std::endl;
+  std::cout << "    CPU time: " << cpu_time << " ms" << std::endl;
+  std::cout << "    GPU time: " << gpu_time << " ms" << std::endl;
+  std::cout << "    Speedup: " << (cpu_time / std::max(gpu_time, 0.001)) << "x" << std::endl;
+  
+  // Overall pass/fail
+  bool pass_vol = max_vol_rel_error < 1e-6;
+  bool pass_grad_cpu_gpu = max_grad_error < 1e-6;
+  bool pass_grad_gpu_fd = max_grad_fd_error < 0.01;
+  bool pass_grad_cpu_fd = max_grad_cpu_fd_error < 0.01;
+  bool pass_hessian_cpu_gpu = max_hessian_error < 1e-5;
+  
+  bool pass = pass_vol && pass_grad_cpu_gpu && pass_grad_gpu_fd && pass_grad_cpu_fd && pass_hessian_cpu_gpu;
+  std::cout << "  Result: " << (pass ? "PASS" : "FAIL") << std::endl;
+  if (!pass) {
+    std::cout << "    Details:" << std::endl;
+    if (!pass_vol) std::cout << "      - Volume matrix CPU vs GPU failed (max rel error: " << max_vol_rel_error << ")" << std::endl;
+    if (!pass_grad_cpu_gpu) std::cout << "      - Gradient CPU vs GPU failed (max error: " << max_grad_error << ")" << std::endl;
+    if (!pass_grad_gpu_fd) std::cout << "      - Gradient GPU vs FD failed (max error: " << max_grad_fd_error << ")" << std::endl;
+    if (!pass_grad_cpu_fd) std::cout << "      - Gradient CPU vs FD failed (max error: " << max_grad_cpu_fd_error << ")" << std::endl;
+    if (!pass_hessian_cpu_gpu) std::cout << "      - Hessian CPU vs GPU failed (max error: " << max_hessian_error << ")" << std::endl;
+  }
+  return pass;
+}
+
+// ============================================================================
 // Main Test Runner
 // ============================================================================
 
@@ -941,6 +1257,10 @@ int main(int argc, char* argv[]) {
   // TriangleMeshDoF test
   total++;
   if (test_intersection_volume_triangle_mesh_dof(leb_file)) passed++;
+  
+  // Multi-object test
+  total++;
+  if (test_multi_object_intersection_volume_comprehensive(leb_file)) passed++;
   
   // Summary
   std::cout << "\n=== Summary ===" << std::endl;

@@ -19,13 +19,25 @@ struct IntersectionVolumeMatrixResult {
   Eigen::MatrixXd volume_matrix;  // nObj × nObj symmetric matrix
   
   // Gradients (only computed if requested)
-  // grad_matrix[i] is the gradient of V[i,j] w.r.t. DoFs of object i
-  // For now, gradients are not implemented (future work)
-  std::vector<Eigen::VectorXd> grad_matrix;  // Empty if not computed
+  // grad_matrix[i][j] is the gradient of V[i,j] w.r.t. DoFs of object i
+  // NOTE: For diagonal entries (i == j), grad_matrix[i][i] stores the contribution
+  // from a single copy of the geometry. The full gradient of V[i,i] w.r.t. object i
+  // is 2 * grad_matrix[i][i]. The same applies to the Hessian blocks below.
+  std::vector<std::vector<Eigen::VectorXd>> grad_matrix;  // Empty if not computed
   
   // Hessians (only computed if requested, Gauss-Newton approximation)
-  // For now, Hessians are not implemented (future work)
-  std::vector<Eigen::MatrixXd> hessian_matrix;  // Empty if not computed
+  // For each pair (i,j), we store three blocks:
+  //   - hessian_ii[i][j]: ∂²V[i,j]/∂θ_i² (Hessian w.r.t. DoFs of object i)
+  //   - hessian_jj[i][j]: ∂²V[i,j]/∂θ_j² (Hessian w.r.t. DoFs of object j)
+  //   - hessian_ij[i][j]: ∂²V[i,j]/∂θ_i∂θ_j (Cross Hessian)
+  // NOTE: For Gauss-Newton approximation, hessian_ii[i][j] and hessian_jj[i][j] are
+  // always zero (we ignore second derivatives). Only hessian_ij[i][j] is non-zero.
+  // The structure is kept for future support of full Hessian computation.
+  // For diagonal entries (i == j), the full Hessian of V[i,i] w.r.t. object i 
+  // is hessian_ii[i][i] + hessian_jj[i][i] + hessian_ij[i][i] + hessian_ij[i][i]^T.
+  std::vector<std::vector<Eigen::MatrixXd>> hessian_ii;  // Empty if not computed, always zero for Gauss-Newton
+  std::vector<std::vector<Eigen::MatrixXd>> hessian_jj;  // Empty if not computed, always zero for Gauss-Newton
+  std::vector<std::vector<Eigen::MatrixXd>> hessian_ij;  // Empty if not computed, only non-zero block for Gauss-Newton
   
   // Metadata
   int num_objects() const { return (int)volume_matrix.rows(); }
