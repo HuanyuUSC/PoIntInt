@@ -235,186 +235,19 @@ else()
   target_compile_options(poIntInt_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# ---- Example executables (optional) ----
+# ---- Include sub-CMakeLists.txt files ----
+# Include app CMakeLists (handles main.cpp and visualize_gradient.cpp)
 if(BUILD_EXE)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/main.cpp")
-    add_executable(poIntInt_app app/main.cpp)
-    target_link_libraries(poIntInt_app PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_app PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "app"
-    )
-    copy_tbb_dlls(poIntInt_app)
-  endif()
-  
-  # Visualization demo (requires libigl viewer with OpenGL/GLFW)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/visualize_gradient.cpp")
-    add_executable(poIntInt_visualize app/visualize_gradient.cpp)
-    target_link_libraries(poIntInt_visualize PRIVATE poIntInt_core)
-    
-    # Define source directory for finding data files
-    # Convert Windows backslashes to forward slashes for the preprocessor string
-    string(REPLACE "\\" "/" POINTINT_SOURCE_DIR_NORMALIZED "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_definitions(poIntInt_visualize PRIVATE 
-      POINTINT_SOURCE_DIR="${POINTINT_SOURCE_DIR_NORMALIZED}"
-    )
-    
-    # Link against libigl viewer components (if available)
-    # Note: igl::glfw should automatically pull in igl::opengl and glad::glad
-    if(TARGET igl::glfw)
-      target_link_libraries(poIntInt_visualize PRIVATE igl::glfw)
-    endif()
-    if(TARGET igl::imgui)
-      # Use PUBLIC linking to ensure include directories are propagated
-      target_link_libraries(poIntInt_visualize PUBLIC igl::imgui)
-    endif()
-    
-    set_target_properties(poIntInt_visualize PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "app"
-    )
-    copy_tbb_dlls(poIntInt_visualize)
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/app/align/main.cpp")
-    # Main executable with all source files
-    add_executable(poIntInt_align
-      app/align/main.cpp
-      app/align/similarity_measure.cpp
-      app/align/optimizer.cpp
-      app/align/warm_start.cpp
-    )
-    target_link_libraries(poIntInt_align PRIVATE poIntInt_core)
-    target_include_directories(poIntInt_align PRIVATE
-      "${CMAKE_CURRENT_SOURCE_DIR}/app/align"
-    )
-    
-    # Define POINTINT_SOURCE_DIR for finding data directory
-    get_filename_component(CMAKE_CURRENT_SOURCE_DIR_NORMALIZED "${CMAKE_CURRENT_SOURCE_DIR}" ABSOLUTE)
-    string(REPLACE "\\" "/" CMAKE_CURRENT_SOURCE_DIR_NORMALIZED "${CMAKE_CURRENT_SOURCE_DIR_NORMALIZED}")
-    target_compile_definitions(poIntInt_align PRIVATE 
-      POINTINT_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR_NORMALIZED}")
-    
-    # Link libigl if available
-    if(TARGET igl::glfw)
-      target_link_libraries(poIntInt_align PRIVATE igl::glfw)
-    endif()
-    if(TARGET igl::imgui)
-      target_link_libraries(poIntInt_align PUBLIC igl::imgui)
-    endif()
-    
-    set_target_properties(poIntInt_align PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "app"
-    )
-    copy_tbb_dlls(poIntInt_align)
-  endif()
+  add_subdirectory(app)
 endif()
 
-# ---- Unit Tests ----
-option(BUILD_TESTS "Build unit tests" ON)
-if(BUILD_TESTS)
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_unit_cube.cpp")
-    add_executable(poIntInt_test_triangle_mesh test/test_unit_cube.cpp)
-    target_link_libraries(poIntInt_test_triangle_mesh PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_triangle_mesh PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-    copy_tbb_dlls(poIntInt_test_triangle_mesh)
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_sphere_pointcloud.cpp")
-    add_executable(poIntInt_test_point_cloud test/test_sphere_pointcloud.cpp)
-    target_link_libraries(poIntInt_test_point_cloud PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_point_cloud PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-    copy_tbb_dlls(poIntInt_test_point_cloud)
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_gaussian_splats.cpp")
-    add_executable(poIntInt_test_gaussian_splat test/test_gaussian_splats.cpp)
-    target_link_libraries(poIntInt_test_gaussian_splat PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_gaussian_splat PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-    copy_tbb_dlls(poIntInt_test_gaussian_splat)
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_multi_object.cpp")
-    add_executable(poIntInt_test_multi_object test/test_multi_object.cpp)
-    target_link_libraries(poIntInt_test_multi_object PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_multi_object PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-    copy_tbb_dlls(poIntInt_test_multi_object)
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_volume_unified.cpp")
-    # Configure header file with source directory path
-    configure_file(
-      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_config.h.in"
-      "${CMAKE_CURRENT_BINARY_DIR}/test_config.h"
-      @ONLY
-    )
-    add_executable(poIntInt_test_volume_unified test/test_volume_unified.cpp)
-    target_link_libraries(poIntInt_test_volume_unified PRIVATE poIntInt_core)
-    # Add include directory for generated config header
-    target_include_directories(poIntInt_test_volume_unified PRIVATE 
-      "${CMAKE_CURRENT_BINARY_DIR}")
-    set_target_properties(poIntInt_test_volume_unified PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-    copy_tbb_dlls(poIntInt_test_volume_unified)
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_dof_parameterization.cpp")
-    add_executable(poIntInt_test_differentiability test/test_dof_parameterization.cpp)
-    target_link_libraries(poIntInt_test_differentiability PRIVATE poIntInt_core)
-    set_target_properties(poIntInt_test_differentiability PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-    copy_tbb_dlls(poIntInt_test_differentiability)
-  endif()
-  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/test/test_intersection_volume_gradient.cpp")
-    # Configure header file with source directory path
-    configure_file(
-      "${CMAKE_CURRENT_SOURCE_DIR}/test/test_config.h.in"
-      "${CMAKE_CURRENT_BINARY_DIR}/test_config.h"
-      @ONLY
-    )
-    add_executable(poIntInt_test_intersection_volume_gradient test/test_intersection_volume_gradient.cpp)
-    target_link_libraries(poIntInt_test_intersection_volume_gradient PRIVATE poIntInt_core)
-    # Add include directory for generated config header
-    target_include_directories(poIntInt_test_intersection_volume_gradient PRIVATE 
-      "${CMAKE_CURRENT_BINARY_DIR}")
-    set_target_properties(poIntInt_test_intersection_volume_gradient PROPERTIES
-      CUDA_SEPARABLE_COMPILATION ON
-      CUDA_RESOLVE_DEVICE_SYMBOLS ON
-      CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
-      FOLDER "test"
-    )
-    copy_tbb_dlls(poIntInt_test_intersection_volume_gradient)
-  endif()
+# Include app/align CMakeLists (handles align application)
+if(BUILD_EXE)
+  add_subdirectory(app/align)
 endif()
+
+# Include test CMakeLists (handles all unit tests)
+add_subdirectory(test)
 
 # ---- Status Output ----
 message(STATUS "CMAKE_BUILD_TYPE                = ${CMAKE_BUILD_TYPE}")
