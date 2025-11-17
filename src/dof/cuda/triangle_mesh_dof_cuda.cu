@@ -13,6 +13,7 @@
 #include <iostream>
 #include <vector>
 #include <Eigen/Dense>
+#include <algorithm>
 
 using PoIntInt::TriPacked;
 using PoIntInt::Phi_ab;
@@ -21,6 +22,8 @@ using PoIntInt::cexp_i;
 using PoIntInt::cadd;
 using PoIntInt::cscale;
 using PoIntInt::cmul;
+
+constexpr int MAX_BLOCK_SIZE = 256;
 
 namespace PoIntInt {
 
@@ -113,8 +116,8 @@ extern "C" __global__ void compute_A_triangle_mesh_kernel(
   }
   
   // Tree reduction using shared memory
-  __shared__ double s_A_x[256];
-  __shared__ double s_A_y[256];
+  __shared__ double s_A_x[MAX_BLOCK_SIZE];
+  __shared__ double s_A_y[MAX_BLOCK_SIZE];
   
   int tid = threadIdx.x;
   if (tid < blockDim.x) {
@@ -151,43 +154,40 @@ extern "C" __global__ void compute_A_gradient_triangle_mesh_kernel(
   int Q,
   double2* grad_A  // Output: Q × (3*num_vertices) complex gradients (row-major)
 ) {
-  int q = blockIdx.x * blockDim.x + threadIdx.x;
+  int q = blockIdx.x;
   if (q >= Q) return;
-  
+
   double3 khat = kdirs[q];
   double k = kmags[q];
   double kx = k * khat.x, ky = k * khat.y, kz = k * khat.z;
+  int num_dofs = 3 * num_vertices;
+
+  int tid = threadIdx.x;
   
+  double2* grad_q = grad_A + q * num_dofs;
+
   if (k < 1e-10) {
-    // At k=0, gradient is zero
-    int num_dofs = 3 * num_vertices;
-    for (int dof = 0; dof < num_dofs; ++dof) {
-      grad_A[q * num_dofs + dof] = make_double2(0.0, 0.0);
+    for (int dof = tid; dof < num_dofs; dof += blockDim.x) {
+      grad_q[dof] = make_double2(0.0, 0.0);
     }
     return;
   }
   
-  int num_dofs = 3 * num_vertices;
-  
-  // Initialize gradient accumulator
-  double2* grad = grad_A + q * num_dofs;
-  for (int i = 0; i < num_dofs; ++i) {
-    grad[i] = make_double2(0.0, 0.0);
+  // Zero gradients for this k-point
+  for (int dof = tid; dof < num_dofs; dof += blockDim.x) {
+    grad_q[dof] = make_double2(0.0, 0.0);
   }
+  __syncthreads();
   
-  // Process each triangle
-  for (int f = 0; f < num_tris; ++f) {
+  // Process each triangle assigned to this thread
+  for (int f = tid; f < num_tris; f += blockDim.x) {
     const TriPacked& tri = tris[f];
     
-    // Get vertex indices from the triangle
     int vid0 = tri.vid0;
     int vid1 = tri.vid1;
     int vid2 = tri.vid2;
-    
-    // Skip if vertex indices are not set (shouldn't happen for TriangleMeshDoF)
     if (vid0 < 0 || vid1 < 0 || vid2 < 0) continue;
     
-    // Get vertex positions from DoFs
     double3 v0 = make_double3(
       vertex_positions[vid0 * 3 + 0],
       vertex_positions[vid0 * 3 + 1],
@@ -204,24 +204,17 @@ extern "C" __global__ void compute_A_gradient_triangle_mesh_kernel(
       vertex_positions[vid2 * 3 + 2]
     );
     
-    // Edges: e1 = v1 - v0, e2 = v2 - v0
     double3 e1 = make_double3(v1.x - v0.x, v1.y - v0.y, v1.z - v0.z);
     double3 e2 = make_double3(v2.x - v0.x, v2.y - v0.y, v2.z - v0.z);
     
-    // Area-vector σn = 0.5 * (e1 × e2)
     double3 sigma_n = make_double3(
       0.5 * (e1.y * e2.z - e1.z * e2.y),
       0.5 * (e1.z * e2.x - e1.x * e2.z),
       0.5 * (e1.x * e2.y - e1.y * e2.x)
     );
     
-    // κ = k̂ · σn (real)
     double kappa = khat.x * sigma_n.x + khat.y * sigma_n.y + khat.z * sigma_n.z;
     
-    // ∇_v_j κ = 0.5 * k̂ × (v_{j+2} - v_{j+1})
-    // For v0: ∇κ = 0.5 * k̂ × (e2 - e1)
-    // For v1: ∇κ = -0.5 * k̂ × e2
-    // For v2: ∇κ = 0.5 * k̂ × e1
     double3 dkap_v0 = make_double3(
       0.5 * (khat.y * (e2.z - e1.z) - khat.z * (e2.y - e1.y)),
       0.5 * (khat.z * (e2.x - e1.x) - khat.x * (e2.z - e1.z)),
@@ -238,64 +231,81 @@ extern "C" __global__ void compute_A_gradient_triangle_mesh_kernel(
       0.5 * (khat.x * e1.y - khat.y * e1.x)
     );
     
-    // T = exp(i k·v0)
     double phase = kx * v0.x + ky * v0.y + kz * v0.z;
     double2 T = cexp_i(phase);
     
-    // ψ = Φ(k·e1, k·e2)
     double k_dot_e1 = kx * e1.x + ky * e1.y + kz * e1.z;
     double k_dot_e2 = kx * e2.x + ky * e2.y + kz * e2.z;
     double2 psi = Phi_ab(k_dot_e1, k_dot_e2);
     
-    // Get gradient of Phi_ab
     double2 dPa_d, dPb_d;
     Phi_ab_gradient(k_dot_e1, k_dot_e2, &dPa_d, &dPb_d);
     
-    // k vector as double3
-    double3 k_vec = make_double3(kx, ky, kz);
-    
-    // Imaginary unit
     double2 I_d = make_double2(0.0, 1.0);
+    double2 psi_I = cmul(psi, I_d);
+    double2 psi_I_minus_dPa_dPb = cadd(cadd(psi_I, cscale(dPa_d, -1.0)), cscale(dPb_d, -1.0));
+    double2 kappa_k_psi_I_minus = cscale(psi_I_minus_dPa_dPb, kappa);
+    double2 kappa_k_dPa = cscale(dPa_d, kappa);
+    double2 kappa_k_dPb = cscale(dPb_d, kappa);
     
-    // Gradient contributions (matching CPU version):
-    // For v0: T * (psi * dkap[0] + kappa * k * (psi * I - dPa - dPb))
-    // For v1: T * (psi * dkap[1] + kappa * k * dPa)
-    // For v2: T * (psi * dkap[2] + kappa * k * dPb)
-    
-    // Compute common terms
-    double2 psi_I = cmul(psi, I_d);  // psi * I
-    double2 psi_I_minus_dPa_dPb = cadd(cadd(psi_I, cscale(dPa_d, -1.0)), cscale(dPb_d, -1.0));  // psi * I - dPa - dPb
-    double2 kappa_k_psi_I_minus = cscale(psi_I_minus_dPa_dPb, kappa);  // kappa * (psi * I - dPa - dPb)
-    double2 kappa_k_dPa = cscale(dPa_d, kappa);  // kappa * dPa
-    double2 kappa_k_dPb = cscale(dPb_d, kappa);  // kappa * dPb
-    
-    // v0 gradient: T * (psi * dkap[0] + kappa * k * (psi * I - dPa - dPb))
-    // Component-wise: for each component i, T * (psi * dkap[0][i] + k[i] * kappa * (psi * I - dPa - dPb))
     double2 grad_v0_x = cadd(cscale(psi, dkap_v0.x), cscale(kappa_k_psi_I_minus, kx));
     double2 grad_v0_y = cadd(cscale(psi, dkap_v0.y), cscale(kappa_k_psi_I_minus, ky));
     double2 grad_v0_z = cadd(cscale(psi, dkap_v0.z), cscale(kappa_k_psi_I_minus, kz));
     
-    grad[vid0 * 3 + 0] = cadd(grad[vid0 * 3 + 0], cmul(T, grad_v0_x));
-    grad[vid0 * 3 + 1] = cadd(grad[vid0 * 3 + 1], cmul(T, grad_v0_y));
-    grad[vid0 * 3 + 2] = cadd(grad[vid0 * 3 + 2], cmul(T, grad_v0_z));
-    
-    // v1 gradient: T * (psi * dkap[1] + kappa * k * dPa)
     double2 grad_v1_x = cadd(cscale(psi, dkap_v1.x), cscale(kappa_k_dPa, kx));
     double2 grad_v1_y = cadd(cscale(psi, dkap_v1.y), cscale(kappa_k_dPa, ky));
     double2 grad_v1_z = cadd(cscale(psi, dkap_v1.z), cscale(kappa_k_dPa, kz));
     
-    grad[vid1 * 3 + 0] = cadd(grad[vid1 * 3 + 0], cmul(T, grad_v1_x));
-    grad[vid1 * 3 + 1] = cadd(grad[vid1 * 3 + 1], cmul(T, grad_v1_y));
-    grad[vid1 * 3 + 2] = cadd(grad[vid1 * 3 + 2], cmul(T, grad_v1_z));
-    
-    // v2 gradient: T * (psi * dkap[2] + kappa * k * dPb)
     double2 grad_v2_x = cadd(cscale(psi, dkap_v2.x), cscale(kappa_k_dPb, kx));
     double2 grad_v2_y = cadd(cscale(psi, dkap_v2.y), cscale(kappa_k_dPb, ky));
     double2 grad_v2_z = cadd(cscale(psi, dkap_v2.z), cscale(kappa_k_dPb, kz));
     
-    grad[vid2 * 3 + 0] = cadd(grad[vid2 * 3 + 0], cmul(T, grad_v2_x));
-    grad[vid2 * 3 + 1] = cadd(grad[vid2 * 3 + 1], cmul(T, grad_v2_y));
-    grad[vid2 * 3 + 2] = cadd(grad[vid2 * 3 + 2], cmul(T, grad_v2_z));
+    double2 contrib;
+    
+    contrib = cmul(T, grad_v0_x);
+    int idx = vid0 * 3 + 0;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v0_y);
+    idx = vid0 * 3 + 1;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v0_z);
+    idx = vid0 * 3 + 2;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v1_x);
+    idx = vid1 * 3 + 0;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v1_y);
+    idx = vid1 * 3 + 1;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v1_z);
+    idx = vid1 * 3 + 2;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v2_x);
+    idx = vid2 * 3 + 0;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v2_y);
+    idx = vid2 * 3 + 1;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
+    
+    contrib = cmul(T, grad_v2_z);
+    idx = vid2 * 3 + 2;
+    atomicAdd(&grad_q[idx].x, contrib.x);
+    atomicAdd(&grad_q[idx].y, contrib.y);
   }
 }
 
@@ -357,8 +367,9 @@ void compute_Ak_triangle_mesh_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_vertex_positions, h_vertex_positions.data(), num_vertices * 3 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
-  block = dim3(blockSize);
+  block = dim3(actualBlockSize);
   compute_A_triangle_mesh_kernel<<<grid, block>>>(
     d_tris, num_tris, d_kdirs, d_kmags, d_vertex_positions, Q, d_A_out
   );
@@ -429,8 +440,9 @@ void compute_Ak_gradient_triangle_mesh_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_vertex_positions, h_vertex_positions.data(), num_vertices * 3 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel (each thread handles one k-point)
-  grid = dim3((Q + blockSize - 1) / blockSize);
-  block = dim3(blockSize);
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  grid = dim3(Q, 1);
+  block = dim3(actualBlockSize);
   compute_A_gradient_triangle_mesh_kernel<<<grid, block>>>(
     d_tris, num_tris, d_kdirs, d_kmags, d_vertex_positions, num_vertices, Q, d_grad_A_out
   );

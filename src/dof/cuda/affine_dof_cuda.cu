@@ -13,6 +13,7 @@
 #include "geometry/packing.hpp"
 #include <iostream>
 #include <vector>
+#include <algorithm>
 
 using PoIntInt::TriPacked;
 using PoIntInt::DiskPacked;
@@ -32,6 +33,8 @@ using PoIntInt::Phi_ab;
 using PoIntInt::Phi_ab_gradient;
 using PoIntInt::J1_over_x;
 using PoIntInt::J1_over_x_prime;
+
+constexpr int MAX_BLOCK_SIZE = 256;
 
 // ===================== CUDA Kernels =====================
 
@@ -106,8 +109,8 @@ extern "C" __global__ void compute_A_affine_triangle_kernel(
   }
   
   // Tree reduction using shared memory
-  __shared__ double s_A_x[256];
-  __shared__ double s_A_y[256];
+  __shared__ double s_A_x[MAX_BLOCK_SIZE];
+  __shared__ double s_A_y[MAX_BLOCK_SIZE];
   
   int tid = threadIdx.x;
   if (tid < blockDim.x) {
@@ -220,8 +223,8 @@ extern "C" __global__ void compute_A_affine_disk_kernel(
   }
   
   // Tree reduction using shared memory
-  __shared__ double s_A_x[256];
-  __shared__ double s_A_y[256];
+  __shared__ double s_A_x[MAX_BLOCK_SIZE];
+  __shared__ double s_A_y[MAX_BLOCK_SIZE];
   
   int tid = threadIdx.x;
   if (tid < blockDim.x) {
@@ -257,16 +260,18 @@ extern "C" __global__ void compute_A_gradient_affine_triangle_kernel(
   int Q,
   double2* grad_A  // Output: Q × 12 complex gradients (row-major)
 ) {
-  int q = blockIdx.x * blockDim.x + threadIdx.x;
+  int q = blockIdx.x;
   if (q >= Q) return;
+  if (blockDim.x > MAX_BLOCK_SIZE) return;
+
+  int tid = threadIdx.x;
   
   double3 khat = kdirs[q];
   double k = kmags[q];
   double kx = k * khat.x, ky = k * khat.y, kz = k * khat.z;
   
   if (k < 1e-10) {
-    // At k=0, gradient is zero
-    for (int dof = 0; dof < 12; ++dof) {
+    for (int dof = tid; dof < 12; dof += blockDim.x) {
       grad_A[q * 12 + dof] = make_double2(0.0, 0.0);
     }
     return;
@@ -278,16 +283,16 @@ extern "C" __global__ void compute_A_gradient_affine_triangle_kernel(
   double3 A_row1 = make_double3(dof_params[6], dof_params[7], dof_params[8]);
   double3 A_row2 = make_double3(dof_params[9], dof_params[10], dof_params[11]);
   Mat3x3 A(A_row0, A_row1, A_row2);
+  Mat3x3 khat_cross = cross_product_matrix(khat);
   
-  // Initialize gradient accumulator
-  double2 grad[12];
+  double2 grad_local[12];
   for (int i = 0; i < 12; ++i) {
-    grad[i] = make_double2(0.0, 0.0);
+    grad_local[i] = make_double2(0.0, 0.0);
   }
   
-  // Process each triangle
-  for (int i = 0; i < num_tris; ++i) {
-    TriPacked tri = tris[i];
+  // Process each triangle assigned to this thread
+  for (int tri_idx = tid; tri_idx < num_tris; tri_idx += blockDim.x) {
+    TriPacked tri = tris[tri_idx];
     
     // Transform using matrix operations
     double3 a_prime = mat3x3_mul_vec(A, tri.a);
@@ -319,44 +324,25 @@ extern "C" __global__ void compute_A_gradient_affine_triangle_kernel(
     Phi_ab_gradient(alpha_prime, beta_prime, &dPhi_dalpha, &dPhi_dbeta);
     
     // Gradient w.r.t. translation t (DoFs 0-2)
-    // dA/dt = i*k * A (since phase = exp(i*k·(A*a+t)))
     double2 ik = make_double2(0.0, kx);
-    grad[0] = cadd(grad[0], cmul(ik, A_tri));
+    grad_local[0] = cadd(grad_local[0], cmul(ik, A_tri));
     
     ik = make_double2(0.0, ky);
-    grad[1] = cadd(grad[1], cmul(ik, A_tri));
+    grad_local[1] = cadd(grad_local[1], cmul(ik, A_tri));
     
     ik = make_double2(0.0, kz);
-    grad[2] = cadd(grad[2], cmul(ik, A_tri));
-    
-    // Gradient w.r.t. matrix A (DoFs 3-11)
-    // Following CPU implementation: gA = A_tri * i*k * a^T + gamma * phase * k * (dPhi_dalpha * e1 + dPhi_dbeta * e2)^T
-    //                                - [k]_× * A * [S]_× * phase * phi
-    // The gradient w.r.t. A_ij is gA.transpose()(i,j) = gA(j,i)
-    // So for grad[3 + row*3 + col] (A_ij where i=row, j=col), we need gA(col, row)
+    grad_local[2] = cadd(grad_local[2], cmul(ik, A_tri));
     
     // Compute cross product matrix [khat]_× * A * [S]_× using matrix operations
     Mat3x3 S_cross = cross_product_matrix(tri.S);
     Mat3x3 A_S_cross = mat3x3_mul_mat(A, S_cross);
-    Mat3x3 khat_cross = cross_product_matrix(khat);
     Mat3x3 khat_A_S = mat3x3_mul_mat(khat_cross, A_S_cross);
     
-    // For each matrix element A_ij (row i, col j)
-    // CPU computes: gA = A_tri * i*k * a^T + gamma * phase * k * (dPhi_dalpha * e1 + dPhi_dbeta * e2)^T
-    //                - [k]_× * A * [S]_× * phase * phi
-    // Then: grad[3 + i*3 + j] = gA.transpose()(i,j) = gA(j,i)
-    // So for grad[3 + row*3 + col] (A_ij where i=row, j=col), we need gA(col, row)
-    
+    // Gradient w.r.t. matrix A (DoFs 3-11)
     for (int row = 0; row < 3; ++row) {
+      double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
       for (int col = 0; col < 3; ++col) {
-        int dof_idx = 3 + row * 3 + col;  // A_ij where i=row, j=col, gradient stored here
-        
-        // We need to compute gA(row, col) because Map(col, row) += gA.transpose()(col, row) = Map(col, row) += gA(row, col)
-        // CPU: gA = A_tri * I * k * a.transpose() → gA(row, col) = A_tri * I * k_row * a_col
-        // So we need: gA(row, col) = A_tri * i*k_row * a_col + gamma * phase * k_row * (dPhi_dalpha * e1_col + dPhi_dbeta * e2_col)
-        //                - ([k]_× * A * [S]_×)(row, col) * phase * phi
-        
-        double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
+        int dof_idx = 3 + row * 3 + col;
         double a_col = (col == 0) ? tri.a.x : ((col == 1) ? tri.a.y : tri.a.z);
         double e1_col = (col == 0) ? tri.e1.x : ((col == 1) ? tri.e1.y : tri.e1.z);
         double e2_col = (col == 0) ? tri.e2.x : ((col == 1) ? tri.e2.y : tri.e2.z);
@@ -364,12 +350,9 @@ extern "C" __global__ void compute_A_gradient_affine_triangle_kernel(
         // Contribution 1: from phase: i*k_row * a_col * A_tri
         double2 ik_contrib = make_double2(0.0, k_row * a_col);
         double2 phase_contrib = cmul(ik_contrib, A_tri);
-        grad[dof_idx] = cadd(grad[dof_idx], phase_contrib);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], phase_contrib);
         
         // Contribution 2: from Phi via alpha and beta
-        // Need: k_row * (dPhi_dalpha * e1_col + dPhi_dbeta * e2_col)
-        // But alpha = k·(A*e1), so ∂alpha/∂A_row,col = k_row * e1_col
-        // Similarly, ∂beta/∂A_row,col = k_row * e2_col
         double dalpha_dA = k_row * e1_col;
         double dbeta_dA = k_row * e2_col;
         double2 dPhi_contrib = cadd(
@@ -378,28 +361,42 @@ extern "C" __global__ void compute_A_gradient_affine_triangle_kernel(
         );
         double2 phi_contrib = cmul(phase_complex, dPhi_contrib);
         phi_contrib = cscale(phi_contrib, gamma_prime);
-        grad[dof_idx] = cadd(grad[dof_idx], phi_contrib);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], phi_contrib);
         
         // Contribution 3: from cross product term
-        // CPU line 298: gA -= cross_product_matrix(khat) * A * cross_product_matrix(S) * phase * phi
-        // So: gA(row, col) -= ([khat]_× * A * [S]_×)(row, col) * phase * phi
-        // CPU line 299: Map(local_grad.data() + 3) += gA.transpose()
-        // Eigen::Map interprets local_grad[3:12] as column-major: Map(i,j) = local_grad[3 + i + j*3]
-        // We store in row-major: local_grad[3 + row*3 + col] = A(row, col)
-        // gA.transpose()(row, col) = gA(col, row) gets written to Map(row, col) = local_grad[3 + row + col*3]
-        // To write to local_grad[3 + row*3 + col], we need Map(col, row), which gets gA.transpose()(col, row) = gA(row, col)
-        // Therefore: grad[3 + row*3 + col] = gA(row, col) = -([khat]_× * A * [S]_×)(row, col) * phase * phi
-        double khat_A_S_val = khat_A_S(row, col);  // Use (row, col) instead of (col, row)
+        double khat_A_S_val = khat_A_S(row, col);
         double2 cross_contrib = cmul(phase_complex, phi_prime);
-        cross_contrib = cscale(cross_contrib, -khat_A_S_val);  // Negative sign to match CPU: gA -= ...
-        grad[dof_idx] = cadd(grad[dof_idx], cross_contrib);
+        cross_contrib = cscale(cross_contrib, -khat_A_S_val);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], cross_contrib);
       }
     }
   }
   
-  // Write results
-  for (int dof = 0; dof < 12; ++dof) {
-    grad_A[q * 12 + dof] = grad[dof];
+  __shared__ double s_grad_real[12][MAX_BLOCK_SIZE];
+  __shared__ double s_grad_imag[12][MAX_BLOCK_SIZE];
+  
+  if (tid < blockDim.x) {
+    for (int dof = 0; dof < 12; ++dof) {
+      s_grad_real[dof][tid] = grad_local[dof].x;
+      s_grad_imag[dof][tid] = grad_local[dof].y;
+    }
+  }
+  __syncthreads();
+  
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+    if (tid < s) {
+      for (int dof = 0; dof < 12; ++dof) {
+        s_grad_real[dof][tid] += s_grad_real[dof][tid + s];
+        s_grad_imag[dof][tid] += s_grad_imag[dof][tid + s];
+      }
+    }
+    __syncthreads();
+  }
+  
+  if (tid == 0) {
+    for (int dof = 0; dof < 12; ++dof) {
+      grad_A[q * 12 + dof] = make_double2(s_grad_real[dof][0], s_grad_imag[dof][0]);
+    }
   }
 }
 
@@ -414,16 +411,17 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
   int Q,
   double2* grad_A  // Output: Q × 12 complex gradients (row-major)
 ) {
-  int q = blockIdx.x * blockDim.x + threadIdx.x;
+  int q = blockIdx.x;
   if (q >= Q) return;
-  
+  if (blockDim.x > MAX_BLOCK_SIZE) return;
+
+  int tid = threadIdx.x;
   double3 khat = kdirs[q];
   double k = kmags[q];
   double kx = k * khat.x, ky = k * khat.y, kz = k * khat.z;
   
   if (k < 1e-10) {
-    // At k=0, gradient is zero
-    for (int dof = 0; dof < 12; ++dof) {
+    for (int dof = tid; dof < 12; dof += blockDim.x) {
       grad_A[q * 12 + dof] = make_double2(0.0, 0.0);
     }
     return;
@@ -447,15 +445,14 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
   double3 k_vec = make_double3(kx, ky, kz);
   double3 k_prime = mat3x3_mul_vec(AT, k_vec);
   
-  // Initialize gradient accumulator
-  double2 grad[12];
+  double2 grad_local[12];
   for (int i = 0; i < 12; ++i) {
-    grad[i] = make_double2(0.0, 0.0);
+    grad_local[i] = make_double2(0.0, 0.0);
   }
   
-  // Process each disk
-  for (int i = 0; i < num_disks; ++i) {
-    DiskPacked disk = disks[i];
+  // Process each disk assigned to this thread
+  for (int disk_idx = tid; disk_idx < num_disks; disk_idx += blockDim.x) {
+    DiskPacked disk = disks[disk_idx];
     
     if (disk.rho <= 0.0 || disk.area < 0.0) continue;
     
@@ -490,23 +487,14 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
     double2 A_disk = cscale(phase_complex, Apar);
     
     // Gradient w.r.t. translation t (DoFs 0-2)
-    // dA/dt = i*k * A (since phase = exp(i*k·(A*c+t)), and t only affects phase)
     double2 ik = make_double2(0.0, kx);
-    grad[0] = cadd(grad[0], cmul(ik, A_disk));
+    grad_local[0] = cadd(grad_local[0], cmul(ik, A_disk));
     ik = make_double2(0.0, ky);
-    grad[1] = cadd(grad[1], cmul(ik, A_disk));
+    grad_local[1] = cadd(grad_local[1], cmul(ik, A_disk));
     ik = make_double2(0.0, kz);
-    grad[2] = cadd(grad[2], cmul(ik, A_disk));
+    grad_local[2] = cadd(grad_local[2], cmul(ik, A_disk));
     
     // Gradient w.r.t. matrix A (DoFs 3-11)
-    // CPU line 338: gA = A_disk * I * k * c.transpose()
-    // CPU line 339: gA += khat * n.transpose() * phase * S_magnitude
-    // CPU line 340-342: gA += phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n).transpose()
-    // CPU line 343: Map(local_grad.data() + 3) += gA.transpose()
-    
-    // Contribution 1: i*k * c^T * A_disk
-    // gA(row, col) = i * k_row * c_col * A_disk
-    // After transpose: grad[3 + row*3 + col] = gA(row, col) = i * k_row * c_col * A_disk
     double2 ik_A = make_double2(-A_disk.y, A_disk.x);  // i * A_disk
     for (int row = 0; row < 3; ++row) {
       double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
@@ -514,12 +502,11 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
         double c_col = (col == 0) ? c.x : ((col == 1) ? c.y : c.z);
         int dof_idx = 3 + row * 3 + col;
         double2 contrib = cscale(ik_A, k_row * c_col);
-        grad[dof_idx] = cadd(grad[dof_idx], contrib);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], contrib);
       }
     }
     
     // Contribution 2: khat * n^T * phase * S_magnitude
-    // gA(row, col) = khat_row * n_col * phase * S_magnitude
     double2 phase_Smag = cscale(phase_complex, Smag);
     for (int row = 0; row < 3; ++row) {
       double khat_row = (row == 0) ? khat.x : ((row == 1) ? khat.y : khat.z);
@@ -527,16 +514,13 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
         double n_col = (col == 0) ? n.x : ((col == 1) ? n.y : n.z);
         int dof_idx = 3 + row * 3 + col;
         double2 contrib = cscale(phase_Smag, khat_row * n_col);
-        grad[dof_idx] = cadd(grad[dof_idx], contrib);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], contrib);
       }
     }
     
     // Contribution 3: phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n)^T
-    // CPU line 342: gA += phase * kdotn / kmag * dS_magnitude * k * (k_prime - kdotn * n).transpose()
-    // This term accounts for how S_magnitude changes with r, and r changes with k_prime
     double dS_magnitude;
     if (rho_r < 1e-10) {
-      // Singularity case: when rho_r is very small, use the limit
       dS_magnitude = -0.25 * disk.rho;
     } else {
       dS_magnitude = 2.0 * J1_over_x_prime(rho_r) / r;
@@ -549,25 +533,45 @@ extern "C" __global__ void compute_A_gradient_affine_disk_kernel(
       k_prime.z - kdotn * n.z
     );
     
-    // Main term: k * (k_prime - kdotn * n)^T (accounts for current k_prime value)
     double coeff = (kdotn / k) * dS_magnitude;
     double2 phase_coeff = cscale(phase_complex, coeff);
 
-    // gA(row, col) = phase_coeff * k_row * kperp_col
     for (int row = 0; row < 3; ++row) {
       double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
       for (int col = 0; col < 3; ++col) {
         double kperp_col = (col == 0) ? kperp.x : ((col == 1) ? kperp.y : kperp.z);
         int dof_idx = 3 + row * 3 + col;
         double2 contrib = cscale(phase_coeff, k_row * kperp_col);
-        grad[dof_idx] = cadd(grad[dof_idx], contrib);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], contrib);
       }
     }
   }
   
-  // Write results
-  for (int dof = 0; dof < 12; ++dof) {
-    grad_A[q * 12 + dof] = grad[dof];
+  __shared__ double s_grad_real[12][MAX_BLOCK_SIZE];
+  __shared__ double s_grad_imag[12][MAX_BLOCK_SIZE];
+
+  if (tid < blockDim.x) {
+    for (int dof = 0; dof < 12; ++dof) {
+      s_grad_real[dof][tid] = grad_local[dof].x;
+      s_grad_imag[dof][tid] = grad_local[dof].y;
+    }
+  }
+  __syncthreads();
+
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+    if (tid < s) {
+      for (int dof = 0; dof < 12; ++dof) {
+        s_grad_real[dof][tid] += s_grad_real[dof][tid + s];
+        s_grad_imag[dof][tid] += s_grad_imag[dof][tid + s];
+      }
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    for (int dof = 0; dof < 12; ++dof) {
+      grad_A[q * 12 + dof] = make_double2(s_grad_real[dof][0], s_grad_imag[dof][0]);
+    }
   }
 }
 
@@ -658,8 +662,8 @@ extern "C" __global__ void compute_A_affine_gaussian_kernel(
   }
   
   // Tree reduction using shared memory
-  __shared__ double s_A_x[256];
-  __shared__ double s_A_y[256];
+  __shared__ double s_A_x[MAX_BLOCK_SIZE];
+  __shared__ double s_A_y[MAX_BLOCK_SIZE];
   
   int tid = threadIdx.x;
   if (tid < blockDim.x) {
@@ -695,16 +699,17 @@ extern "C" __global__ void compute_A_gradient_affine_gaussian_kernel(
   int Q,
   double2* grad_A  // Output: Q × 12 complex gradients (row-major: grad_A[q * 12 + dof])
 ) {
-  int q = blockIdx.x * blockDim.x + threadIdx.x;
+  int q = blockIdx.x;
   if (q >= Q) return;
-  
+  if (blockDim.x > MAX_BLOCK_SIZE) return;
+
+  int tid = threadIdx.x;
   double3 khat = kdirs[q];
   double k = kmags[q];
   double kx = k * khat.x, ky = k * khat.y, kz = k * khat.z;
   
   if (k < 1e-10) {
-    // At k=0, gradient = 0
-    for (int dof = 0; dof < 12; ++dof) {
+    for (int dof = tid; dof < 12; dof += blockDim.x) {
       grad_A[q * 12 + dof] = make_double2(0.0, 0.0);
     }
     return;
@@ -728,71 +733,50 @@ extern "C" __global__ void compute_A_gradient_affine_gaussian_kernel(
   double3 k_vec = make_double3(kx, ky, kz);
   double3 k_prime = mat3x3_mul_vec(AT, k_vec);
   
-  // Initialize gradient accumulator for this thread
-  double2 grad[12];
+  double2 grad_local[12];
   for (int i = 0; i < 12; ++i) {
-    grad[i] = make_double2(0.0, 0.0);
+    grad_local[i] = make_double2(0.0, 0.0);
   }
   
-  // Process each Gaussian (each thread processes all Gaussians for its k-point)
-  for (int i = 0; i < num_gaussians; ++i) {
-    GaussianPacked g = gaussians[i];
+  // Process Gaussians assigned to this thread
+  for (int idx = tid; idx < num_gaussians; idx += blockDim.x) {
+    GaussianPacked g = gaussians[idx];
     
     if (g.sigma <= 0.0 || g.w < 0.0) continue;
     
-    // Transform center: c' = A * c + t
     double3 c = make_double3(g.c.x, g.c.y, g.c.z);
     double3 c_prime = mat3x3_mul_vec(A, c);
     c_prime.x += t.x; c_prime.y += t.y; c_prime.z += t.z;
     
-    // Normal is not transformed
     double3 n = make_double3(g.n.x, g.n.y, g.n.z);
     
-    // Compute k'·n
     double kdotn = k_prime.x * n.x + k_prime.y * n.y + k_prime.z * n.z;
     
-    // Compute r^2 = |k'|^2 - (k'·n)^2
     double kprime_sq = k_prime.x*k_prime.x + k_prime.y*k_prime.y + k_prime.z*k_prime.z;
     double r2 = fmax(kprime_sq - kdotn*kdotn, 0.0);
     
-    // S_gauss(k) = w * exp(-0.5 * sigma^2 * r^2)
     double exp_arg = -0.5 * g.sigma * g.sigma * r2;
     double Smag = g.w * exp(exp_arg);
     
-    // A_parallel = S_magnitude * (k'·n) / |k|
     double Apar = Smag * kdotn / k;
     if (!isfinite(Apar)) Apar = 0.0;
     
-    // Phase = exp(i*k·c')
     double phase = kx*c_prime.x + ky*c_prime.y + kz*c_prime.z;
     double2 phase_complex = cexp_i(phase);
     
     double2 A_gauss = cscale(phase_complex, Apar);
     
     // Gradient w.r.t. translation t (DoFs 0-2)
-    // dA/dt = i*k * A (since phase = exp(i*k·(A*c+t)), and t only affects phase)
     double2 ik = make_double2(0.0, kx);
-    grad[0] = cadd(grad[0], cmul(ik, A_gauss));
+    grad_local[0] = cadd(grad_local[0], cmul(ik, A_gauss));
     
     ik = make_double2(0.0, ky);
-    grad[1] = cadd(grad[1], cmul(ik, A_gauss));
+    grad_local[1] = cadd(grad_local[1], cmul(ik, A_gauss));
     
     ik = make_double2(0.0, kz);
-    grad[2] = cadd(grad[2], cmul(ik, A_gauss));
+    grad_local[2] = cadd(grad_local[2], cmul(ik, A_gauss));
     
     // Gradient w.r.t. matrix A (DoFs 3-11)
-    // We need to compute gA such that grad[3 + row*3 + col] = gA(row, col)
-    // Following the CPU implementation:
-    //   gA = A_gauss * i*k * c^T
-    //   + khat * n^T * phase * S_magnitude
-    //   + phase * kdotn/kmag * dS_magnitude * k * (k_prime - kdotn*n)^T
-    //   where dS_magnitude = -sigma^2 * S_magnitude
-    
-    // Contribution 1: A_gauss * i*k * c^T
-    // Following CPU: gA = A_gauss * i*k * c^T
-    // This means: gA(row, col) = A_gauss * i * k_row * c_col
-    // = (i * A_gauss) * k_row * c_col
-    // i * A_gauss = (-A_gauss.y, A_gauss.x)
     double2 ik_A = make_double2(-A_gauss.y, A_gauss.x);  // i * A_gauss
     for (int row = 0; row < 3; ++row) {
       double k_row = (row == 0) ? kx : ((row == 1) ? ky : kz);
@@ -800,7 +784,7 @@ extern "C" __global__ void compute_A_gradient_affine_gaussian_kernel(
         double c_col = (col == 0) ? c.x : ((col == 1) ? c.y : c.z);
         int dof_idx = 3 + row * 3 + col;
         double2 contrib1 = cscale(ik_A, k_row * c_col);
-        grad[dof_idx] = cadd(grad[dof_idx], contrib1);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], contrib1);
       }
     }
     
@@ -811,12 +795,11 @@ extern "C" __global__ void compute_A_gradient_affine_gaussian_kernel(
         double n_col = (col == 0) ? n.x : ((col == 1) ? n.y : n.z);
         int dof_idx = 3 + row * 3 + col;
         double2 contrib2 = cscale(phase_complex, khat_row * n_col * Smag);
-        grad[dof_idx] = cadd(grad[dof_idx], contrib2);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], contrib2);
       }
     }
     
     // Contribution 3: phase * kdotn/kmag * dS_magnitude * k * (k_prime - kdotn*n)^T
-    // dS_magnitude = -sigma^2 * S_magnitude
     double dS_magnitude = -g.sigma * g.sigma * Smag;
     double3 k_perp = make_double3(
       k_prime.x - kdotn * n.x,
@@ -832,14 +815,36 @@ extern "C" __global__ void compute_A_gradient_affine_gaussian_kernel(
         double kperp_col = (col == 0) ? k_perp.x : ((col == 1) ? k_perp.y : k_perp.z);
         int dof_idx = 3 + row * 3 + col;
         double2 contrib3 = cscale(phase_coeff3, k_row * kperp_col);
-        grad[dof_idx] = cadd(grad[dof_idx], contrib3);
+        grad_local[dof_idx] = cadd(grad_local[dof_idx], contrib3);
       }
     }
   }
   
-  // Write results
-  for (int dof = 0; dof < 12; ++dof) {
-    grad_A[q * 12 + dof] = grad[dof];
+  __shared__ double s_grad_real[12][MAX_BLOCK_SIZE];
+  __shared__ double s_grad_imag[12][MAX_BLOCK_SIZE];
+  
+  if (tid < blockDim.x) {
+    for (int dof = 0; dof < 12; ++dof) {
+      s_grad_real[dof][tid] = grad_local[dof].x;
+      s_grad_imag[dof][tid] = grad_local[dof].y;
+    }
+  }
+  __syncthreads();
+  
+  for (int s = blockDim.x / 2; s > 0; s >>= 1) {
+    if (tid < s) {
+      for (int dof = 0; dof < 12; ++dof) {
+        s_grad_real[dof][tid] += s_grad_real[dof][tid + s];
+        s_grad_imag[dof][tid] += s_grad_imag[dof][tid + s];
+      }
+    }
+    __syncthreads();
+  }
+  
+  if (tid == 0) {
+    for (int dof = 0; dof < 12; ++dof) {
+      grad_A[q * 12 + dof] = make_double2(s_grad_real[dof][0], s_grad_imag[dof][0]);
+    }
   }
 }
 
@@ -908,8 +913,9 @@ void compute_Ak_affine_triangle_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
-  block = dim3(blockSize);
+  block = dim3(actualBlockSize);
   compute_A_affine_triangle_kernel<<<grid, block>>>(
     d_tris, NF, d_kdirs, d_kmags, d_dofs, Q, d_A_out
   );
@@ -984,8 +990,9 @@ void compute_Ak_gradient_affine_triangle_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
-  grid = dim3((Q + blockSize - 1) / blockSize);
-  block = dim3(blockSize);
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  grid = dim3(Q, 1);
+  block = dim3(actualBlockSize);
   compute_A_gradient_affine_triangle_kernel<<<grid, block>>>(
     d_tris, NF, d_kdirs, d_kmags, d_dofs, Q, d_grad_A_out
   );
@@ -1060,8 +1067,9 @@ void compute_Ak_affine_disk_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
-  block = dim3(blockSize);
+  block = dim3(actualBlockSize);
   compute_A_affine_disk_kernel<<<grid, block>>>(
     d_disks, ND, d_kdirs, d_kmags, d_dofs, Q, d_A_out
   );
@@ -1137,8 +1145,9 @@ void compute_Ak_gradient_affine_disk_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
-  grid = dim3((Q + blockSize - 1) / blockSize);
-  block = dim3(blockSize);
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  grid = dim3(Q, 1);
+  block = dim3(actualBlockSize);
   compute_A_gradient_affine_disk_kernel<<<grid, block>>>(
     d_disks, ND, d_kdirs, d_kmags, d_dofs, Q, d_grad_A_out
   );
@@ -1213,8 +1222,9 @@ void compute_Ak_affine_gaussian_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
-  block = dim3(blockSize);
+  block = dim3(actualBlockSize);
   compute_A_affine_gaussian_kernel<<<grid, block>>>(
     d_gaussians, NG, d_kdirs, d_kmags, d_dofs, Q, d_A_out
   );
@@ -1288,9 +1298,10 @@ void compute_Ak_gradient_affine_gaussian_cuda_wrapper(
   }
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
-  // Launch kernel (each thread handles one k-point, processes all Gaussians)
-  grid = dim3((Q + blockSize - 1) / blockSize);
-  block = dim3(blockSize);
+  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  // Launch kernel (each block handles one k-point, threads process Gaussians)
+  grid = dim3(Q, 1);
+  block = dim3(actualBlockSize);
   compute_A_gradient_affine_gaussian_kernel<<<grid, block>>>(
     d_gaussians, NG, d_kdirs, d_kmags, d_dofs, Q, d_grad_A_out
   );
