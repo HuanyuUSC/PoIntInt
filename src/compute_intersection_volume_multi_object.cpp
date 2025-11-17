@@ -1,5 +1,7 @@
 #include "compute_intersection_volume_multi_object.hpp"
-#include "form_factor_helpers.hpp"
+#include "dof/dof_parameterization.hpp"
+#include "computation_flags.hpp"
+#include "geometry/types.hpp"
 #include <cmath>
 #include <complex>
 #include <vector>
@@ -11,6 +13,15 @@
 #include <tbb/blocked_range.h>
 #include <Eigen/Dense>
 
+using PoIntInt::get_geometry_type_name;
+using PoIntInt::get_geometry_element_name;
+using PoIntInt::GEOM_TRIANGLE;
+using PoIntInt::GEOM_DISK;
+using PoIntInt::GEOM_GAUSSIAN;
+using PoIntInt::needs_volume;
+using PoIntInt::needs_gradient;
+using PoIntInt::needs_hessian;
+
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
@@ -18,18 +29,36 @@
 namespace PoIntInt {
 
 IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cpu(
-  const std::vector<Geometry>& geometries,
+  const std::vector<Geometry>& ref_geometries,
+  const std::vector<std::shared_ptr<DoFParameterization>>& dofs,
+  const std::vector<Eigen::VectorXd>& dof_vectors,
   const KGrid& kgrid,
+  ComputationFlags flags,
   bool enable_profiling)
 {
   auto t_start = std::chrono::high_resolution_clock::now();
   
   IntersectionVolumeMatrixResult result;
-  int num_objects = (int)geometries.size();
+  int num_objects = (int)ref_geometries.size();
   
+  // Validate inputs
   if (num_objects == 0) {
     result.volume_matrix = Eigen::MatrixXd::Zero(0, 0);
     return result;
+  }
+  
+  if ((int)dofs.size() != num_objects || (int)dof_vectors.size() != num_objects) {
+    std::cerr << "Error: Mismatch between number of geometries (" << num_objects 
+              << ") and number of DoF parameterizations (" << dofs.size() 
+              << ") or DoF vectors (" << dof_vectors.size() << ")" << std::endl;
+    result.volume_matrix = Eigen::MatrixXd::Zero(num_objects, num_objects);
+    return result;
+  }
+  
+  // For now, only VOLUME_ONLY is supported
+  if (needs_gradient(flags) || needs_hessian(flags)) {
+    std::cerr << "Warning: Gradients and Hessians for multi-object intersection volume matrix are not yet implemented. Computing volume only." << std::endl;
+    flags = ComputationFlags::VOLUME_ONLY;
   }
   
   int Q = (int)kgrid.kmag.size();
@@ -41,7 +70,7 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cpu(
   std::vector<std::complex<double>> J(Q * num_objects);
   
   // Parallelize over k-nodes (outer loop)
-  // For each k-node, compute A(k) for all objects
+  // For each k-node, compute A(k) for all objects using their DoF parameterizations
   tbb::parallel_for(
     tbb::blocked_range<size_t>(0, Q),
     [&](const tbb::blocked_range<size_t>& r) {
@@ -52,10 +81,10 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cpu(
         Eigen::Vector3d kdir((double)kdir_arr[0], (double)kdir_arr[1], (double)kdir_arr[2]);
         Eigen::Vector3d k = kmag * kdir;
         
-        // Compute A(k) for all objects at this k-node
+        // Compute A(k) for all objects at this k-node using their DoF parameterizations
         for (size_t obj = 0; obj < num_objects; ++obj) {
-          // Compute A(k) for this geometry
-          std::complex<double> A = compute_A_geometry(geometries[obj], k);
+          // Compute A(k) for this geometry using its DoF parameterization
+          std::complex<double> A = dofs[obj]->compute_A(ref_geometries[obj], k, dof_vectors[obj]);
           
           // Store in row-major format: J[q * num_objects + obj]
           J[q * num_objects + obj] = A;
@@ -137,16 +166,16 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cpu(
     // Count geometry types
     int num_meshes = 0, num_pointclouds = 0, num_gaussians = 0;
     int total_tris = 0, total_disks = 0, total_gaussians = 0;
-    for (const auto& geom : geometries) {
-      if (geom.type == GEOM_TRIANGLE) {
+    for (int obj = 0; obj < num_objects; ++obj) {
+      if (ref_geometries[obj].type == GEOM_TRIANGLE) {
         num_meshes++;
-        total_tris += (int)geom.tris.size();
-      } else if (geom.type == GEOM_DISK) {
+        total_tris += (int)ref_geometries[obj].tris.size();
+      } else if (ref_geometries[obj].type == GEOM_DISK) {
         num_pointclouds++;
-        total_disks += (int)geom.disks.size();
-      } else if (geom.type == GEOM_GAUSSIAN) {
+        total_disks += (int)ref_geometries[obj].disks.size();
+      } else if (ref_geometries[obj].type == GEOM_GAUSSIAN) {
         num_gaussians++;
-        total_gaussians += (int)geom.gaussians.size();
+        total_gaussians += (int)ref_geometries[obj].gaussians.size();
       }
     }
     // Build geometry types string
