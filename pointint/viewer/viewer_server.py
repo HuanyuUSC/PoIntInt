@@ -72,10 +72,7 @@ class ViewerServer:
         step=1e-3,
         initial_value=1.0 / self._config.target_hz,
       )
-      self._gui_button = self._server.gui.add_button(
-        "Step once",
-        icon=viser.Icon.PLAY,
-      )
+      self._gui_button = self._server.gui.add_button("Step once")
 
     @self._gui_button.on_click
     def _(_) -> None:
@@ -113,12 +110,13 @@ class ViewerServer:
   def _compute_colors(self, positions: np.ndarray) -> np.ndarray:
     """Generate simple colors based on point height."""
     heights = positions[:, 2]
-    normalized = (heights - heights.min()) / max(heights.ptp(), 1e-3)
+    normalized = (heights - np.min(heights)) / max(np.ptp(heights), 1e-3)
+    blue = np.full_like(heights, 255 * np.abs(np.sin(self._time)))
     colormap = np.stack(
       [
         255 * (1.0 - normalized),
         180 * normalized,
-        255 * np.abs(np.sin(self._time)),
+        blue,
       ],
       axis=1,
     )

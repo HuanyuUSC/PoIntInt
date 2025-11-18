@@ -6,13 +6,11 @@ dependencies = [
     "torch==2.8.0+cu126",
     "torchvision==0.23.0+cu126",
     "kaolin==0.18.0",
-    "warp-lang==1.9.0",
+    "warp-lang>=1.9.0",
     "loguru>=0.7.2",
     "tqdm>=4.66.5",
     "pip>=24.0",
-    "pyside6",
-    "pyvista",
-    "pyvistaqt"
+    "viser"
 ]
 
 [build-system]
