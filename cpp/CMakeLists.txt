@@ -230,7 +230,7 @@ endif()
 
 # ---- Warnings ----
 if(MSVC)
-  target_compile_options(poIntInt_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4>)
+  target_compile_options(poIntInt_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:/W4 /MD>)
 else()
   target_compile_options(poIntInt_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -253,3 +253,50 @@ add_subdirectory(test)
 message(STATUS "CMAKE_BUILD_TYPE                = ${CMAKE_BUILD_TYPE}")
 message(STATUS "CMAKE_CUDA_ARCHITECTURES        = ${CMAKE_CUDA_ARCHITECTURES}")
 message(STATUS "Eigen3::Eigen                   = ${EIGEN3_INCLUDE_DIR}")
+
+# ===========================================================================
+# Pybind11
+# ===========================================================================
+option(BUILD_PYTHON_BINDINGS "Build the Python bindings" ON)
+option(BUILD_MINIMAL_PYBIND "Build the minimal pybind11 example" ON)
+
+if(BUILD_PYTHON_BINDINGS OR BUILD_MINIMAL_PYBIND)
+  # Let you choose the exact interpreter in CMake-GUI
+  set(Python_EXECUTABLE "" CACHE FILEPATH "Path to the Python 3.8 interpreter")
+
+  # Ask for Python 3.8 *only*, but don't hardcode where it is.
+  find_package(Python 3.8 EXACT REQUIRED COMPONENTS Interpreter Development)
+
+  FetchContent_Declare(
+    pybind11
+    GIT_REPOSITORY https://github.com/pybind/pybind11.git
+    GIT_TAG v2.10.4
+  )
+  FetchContent_MakeAvailable(pybind11)
+
+  if(BUILD_PYTHON_BINDINGS)
+    add_library(pointint_core_python MODULE pybind/pybind.cpp)
+    target_link_libraries(pointint_core_python PRIVATE
+      poIntInt_core
+      pybind11::module
+      CUDA::cudart_static
+      TBB::tbb
+    )
+    set_target_properties(pointint_core_python PROPERTIES
+      PREFIX ""
+      SUFFIX ".pyd"
+      FOLDER "python"
+    )
+    copy_tbb_dlls(pointint_core_python)
+  endif()
+
+  if(BUILD_MINIMAL_PYBIND)
+    add_library(minimal MODULE pybind/minimal_pybind.cpp)
+    target_link_libraries(minimal PRIVATE pybind11::module)
+    set_target_properties(minimal PROPERTIES
+      PREFIX ""
+      SUFFIX ".pyd"
+      FOLDER "python"
+    )
+  endif()
+endif()

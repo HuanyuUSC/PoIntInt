@@ -6,6 +6,7 @@
 #include <tbb/parallel_reduce.h>
 #include <tbb/blocked_range.h>
 #include <functional>
+#include <iostream>
 
 namespace PoIntInt {
 

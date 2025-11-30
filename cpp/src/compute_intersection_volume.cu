@@ -237,6 +237,8 @@ IntersectionVolumeResult compute_intersection_volume_cuda(
   std::string dof1_type, dof2_type;
   std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc> kernels1, kernels2;
   std::vector<double> h_weights;
+  std::vector<double2> h_A1(Q);
+  std::vector<double2> h_A2(Q);
   
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
