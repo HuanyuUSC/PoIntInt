@@ -1,3 +1,19 @@
+# Paper Outline
+## Preliminary
+around 8-9 pages: 1-2 intro+related works, 3-7 background+our method, 8-9 results+conclusion
+## Intro
+
+## Related works
+
+## Background
+
+## Our method
+
+## Results
+
+## Conclusion
+
+
 # Demo
 
 ## Shape similarity
