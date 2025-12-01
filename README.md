@@ -233,8 +233,8 @@ TBD.
 ## 9. Demos
 
 <p align="center">
-  <img src="demo/demo1.gif" alt="Intersection volume demo 1" width="380">
+  <img src="demo/mesh.gif" alt="Intersection volume demo 1" width="380">
   &nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="demo/demo2.gif" alt="Intersection volume demo 2" width="380">
+  <img src="demo/simple.gif" alt="Intersection volume demo 2" width="380">
 </p>
 
