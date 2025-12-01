@@ -11,10 +11,20 @@ around 8-9 pages: 1-2 intro+related works, 3-7 background+our method, 8-9 result
 
 ## Results
 
+### Method Validation
+
+### Application: Shape Similarity
+
+### Application: Collision
+
+
+
 ## Conclusion
 
+# Demo Video ourline
 
-# Demo
+
+# Demo Brainstorm
 
 ## Shape similarity
 
