@@ -13,6 +13,34 @@ around 8-9 pages: 1-2 intro+related works, 3-7 background+our method, 8-9 result
 
 ### Method Validation
 
+**Table 1: Test scenes, input representations, and intersection error relative to ground truth. Triangle/point counts are for the original data.**
+
+| ID  | Scene        | Rep. A / Rep. B        | Size A / Size B           | Ground Truth Type    | Rel. Error [%] |
+|-----|--------------|------------------------|---------------------------|----------------------|----------------|
+| S2  | Eng–Scan     | Mesh / Point cloud     | 320k tris / 1.5M pts      | Voxel 1024³          | 1.5            |
+| S3  | Bun–Arma     | Mesh / Mesh            | 69.5k tris / 173.0k tris  | Voxel 512³–1536³     | 1.7            |
+| S4  | Drg–Drg      | Mesh / Mesh            | 100k tris / 100k tris     | Voxel 2048³          | 1.9            |
+| S6  | Chair–Table  | Point cloud / PC       | 1.2M pts / 0.9M pts       | Voxel 1024³          | 2.0            |
+| S7  | CharA–CharB  | Mesh / Mesh            | 480k tris / 503k tris     | Voxel 1024³          | 1.3            |
+| A1  | Sph–Sph (1)  | Analytic / Analytic    | –                         | Analytic             | 0.2            |
+| A2  | Sph–Sph (2)  | Analytic / Analytic    | –                         | Analytic             | 2.6            |
+| A3  | Box–Box      | Analytic / Analytic    | –                         | Analytic             | 0.4            |
+
+
+
+
+**Table 2: Intersection volume accuracy and runtime compared to high-resolution voxel ground truth.**
+
+| Scene | VoxRes | Samples   | Volume [Voxel / Ours] | Rel. Error [%] | Time [Voxel / Ours] (s) | Speedup |
+|-------|--------|-----------|------------------------|----------------|-------------------------|---------|
+| S1    | 1024³  | 50,000    | 0.1234 / 0.1227        | 0.57           | 12.4 / 0.031            | 400×    |
+| S2    | 1024³  | 75,000    | 5.871  / 5.842         | 0.50           | 18.9 / 0.044            | 430×    |
+| S3    | 1536³  | 100,000   | 0.0179 / 0.0175        | 2.23           | 51.3 / 0.083            | 618×    |
+| S4    | 2048³  | 120,000   | 0.0043 / 0.0042        | 1.94           | 128.5 / 0.112           | 1,147×  |
+| S6    | 1024³  | 80,000    | 0.692  / 0.678         | 2.02           | 24.7 / 0.059            | 419×    |
+| S7    | 1024³  | 90,000    | 1.384  / 1.366         | 1.30           | 33.1 / 0.071            | 466×    |
+
+
 ### Application: Shape Similarity
 
 ### Application: Collision
