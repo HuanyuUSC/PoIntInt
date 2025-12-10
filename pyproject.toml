@@ -12,7 +12,26 @@ dependencies = [
     "pip>=24.0",
     "pyside6",
     "pyvista",
-    "pyvistaqt"
+    "pyvistaqt",
+    "viser>=0.2.0",
+]
+
+[project.optional-dependencies]
+# Minimal dependencies for intersection module (works on macOS without kaolin)
+intersection = [
+    "warp-lang==1.9.0",
+    "numpy>=1.24.0",
+    "pytest>=7.0.0",
+    "scipy>=1.10.0",
+]
+
+[dependency-groups]
+# Dependency group for intersection module testing (no kaolin needed)
+intersection-test = [
+    "warp-lang==1.9.0",
+    "numpy>=1.24.0",
+    "pytest>=7.0.0",
+    "scipy>=1.10.0",
 ]
 
 [build-system]

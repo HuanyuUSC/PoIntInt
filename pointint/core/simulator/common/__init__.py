@@ -1,8 +1,10 @@
-from .collisions import *
-from .optimization import *
-from .scene_forces import *
+import pointint.core.simulator.common.collisions as collisions
+import pointint.core.simulator.common.optimization as optimization
+import pointint.core.simulator.common.scene_forces as scene_forces
 
-from . import collisions, optimization, scene_forces
+from pointint.core.simulator.common.collisions import *
+from pointint.core.simulator.common.optimization import *
+from pointint.core.simulator.common.scene_forces import *
 
 __all__ = (
     getattr(collisions, '__all__', []) +

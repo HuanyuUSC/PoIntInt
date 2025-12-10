@@ -1,8 +1,10 @@
-from .finite_diff import *
-from .warp_utilities import *
-from .torch_utilities import *
+import pointint.core.simulator.utils.finite_diff as finite_diff
+import pointint.core.simulator.utils.warp_utilities as warp_utilities
+import pointint.core.simulator.utils.torch_utilities as torch_utilities
 
-from . import finite_diff, warp_utilities, torch_utilities
+from pointint.core.simulator.utils.finite_diff import *
+from pointint.core.simulator.utils.warp_utilities import *
+from pointint.core.simulator.utils.torch_utilities import *
 
 __all__ = (
     getattr(finite_diff, '__all__', []) +
