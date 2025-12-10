@@ -225,3 +225,4 @@ coverage/
 uv.lock
 .claude/settings.local.json
 /.ipynb_checkpoints
+/data

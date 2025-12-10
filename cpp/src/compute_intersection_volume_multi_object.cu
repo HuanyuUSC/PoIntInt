@@ -329,7 +329,27 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
   
   // Host result buffer (declare early to avoid goto issues)
   std::vector<double> h_V(num_objects * num_objects);
-  
+
+  // Timing variables (declared early to avoid goto issues)
+  auto t_malloc_start = t_start_total;
+  auto t_malloc_end = t_start_total;
+  auto t_memcpy_start = t_start_total;
+  auto t_memcpy_end = t_start_total;
+  auto t_kernel1_start = t_start_total;
+  auto t_kernel1_end = t_start_total;
+  auto t_kernel2_start = t_start_total;
+  auto t_kernel2_end = t_start_total;
+  auto t_kernel3_start = t_start_total;
+  auto t_kernel3_end = t_start_total;
+  auto t_kernel4_start = t_start_total;
+  auto t_kernel4_end = t_start_total;
+  auto t_result_start = t_start_total;
+  auto t_result_end = t_start_total;
+  auto t_end_total = t_start_total;
+  double malloc_time = 0.0, memcpy_time = 0.0, kernel1_time = 0.0, kernel2_time = 0.0;
+  double kernel3_time = 0.0, kernel4_time = 0.0, result_time = 0.0, total_time = 0.0;
+  dim3 block_V, grid_V;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -337,8 +357,8 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
       goto cleanup; \
     } \
   } while(0)
-  
-  auto t_malloc_start = std::chrono::high_resolution_clock::now();
+
+  t_malloc_start = std::chrono::high_resolution_clock::now();
   
   // Allocate J matrix (Q × num_objects complex numbers, row-major)
   CUDA_CHECK(cudaMalloc(&d_J, Q * num_objects * sizeof(double2)));
@@ -371,14 +391,14 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     CUDA_CHECK(cudaMemcpy(d_dof_offsets, dof_offsets.data(), num_objects * sizeof(int), cudaMemcpyHostToDevice));
   }
   
-  auto t_malloc_end = std::chrono::high_resolution_clock::now();
-  auto t_memcpy_start = std::chrono::high_resolution_clock::now();
+  t_malloc_end = std::chrono::high_resolution_clock::now();
+  t_memcpy_start = std::chrono::high_resolution_clock::now();
   
   // Copy k-grid weights
   CUDA_CHECK(cudaMemcpy(d_weights, kgrid.w.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
   
-  auto t_memcpy_end = std::chrono::high_resolution_clock::now();
-  auto t_kernel1_start = std::chrono::high_resolution_clock::now();
+  t_memcpy_end = std::chrono::high_resolution_clock::now();
+  t_kernel1_start = std::chrono::high_resolution_clock::now();
   
   // Phase 1: Compute form factor matrix J using DoF-specific kernels
   // For each object, compute A(k) for all k-nodes using its DoF parameterization
@@ -397,21 +417,21 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     CUDA_CHECK(cudaDeviceSynchronize());
   }
   
-  auto t_kernel1_end = std::chrono::high_resolution_clock::now();
-  auto t_kernel2_start = std::chrono::high_resolution_clock::now();
+  t_kernel1_end = std::chrono::high_resolution_clock::now();
+  t_kernel2_start = std::chrono::high_resolution_clock::now();
   
   // Phase 2: Compute volume matrix V = J^T D J
   // Use 16x16 thread blocks for matrix computation
-  dim3 block_V(16, 16);
-  dim3 grid_V((num_objects + block_V.x - 1) / block_V.x,
-              (num_objects + block_V.y - 1) / block_V.y);
+  block_V = dim3(16, 16);
+  grid_V = dim3((num_objects + block_V.x - 1) / block_V.x,
+                (num_objects + block_V.y - 1) / block_V.y);
   compute_volume_matrix_kernel<<<grid_V, block_V>>>(
     d_J, d_weights, Q, num_objects, d_V
   );
   CUDA_CHECK(cudaDeviceSynchronize());
   
-  auto t_kernel2_end = std::chrono::high_resolution_clock::now();
-  auto t_kernel3_start = std::chrono::high_resolution_clock::now();
+  t_kernel2_end = std::chrono::high_resolution_clock::now();
+  t_kernel3_start = std::chrono::high_resolution_clock::now();
   
   // Phase 3: Compute gradients (if needed)
   if (need_gradients) {
@@ -432,8 +452,8 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     }
   }
   
-  auto t_kernel3_end = std::chrono::high_resolution_clock::now();
-  auto t_kernel4_start = std::chrono::high_resolution_clock::now();
+  t_kernel3_end = std::chrono::high_resolution_clock::now();
+  t_kernel4_start = std::chrono::high_resolution_clock::now();
   
   // Phase 4: Compute gradients and Hessians for each pair (i,j)
   if (needs_gradient(flags)) {
@@ -589,30 +609,30 @@ IntersectionVolumeMatrixResult compute_intersection_volume_matrix_cuda(
     }
   }
   
-  auto t_kernel4_end = std::chrono::high_resolution_clock::now();
-  auto t_result_start = std::chrono::high_resolution_clock::now();
+  t_kernel4_end = std::chrono::high_resolution_clock::now();
+  t_result_start = std::chrono::high_resolution_clock::now();
   
   // Copy volume matrix result back
   CUDA_CHECK(cudaMemcpy(h_V.data(), d_V, num_objects * num_objects * sizeof(double), cudaMemcpyDeviceToHost));
   
-  auto t_result_end = std::chrono::high_resolution_clock::now();
+  t_result_end = std::chrono::high_resolution_clock::now();
   
   // Convert to Eigen matrix
   result.volume_matrix = Eigen::Map<Eigen::MatrixXd>(h_V.data(), num_objects, num_objects);
   
   // End total timing
-  auto t_end_total = std::chrono::high_resolution_clock::now();
+  t_end_total = std::chrono::high_resolution_clock::now();
   
   // Calculate timing statistics
-  auto malloc_time = std::chrono::duration_cast<std::chrono::microseconds>(t_malloc_end - t_malloc_start).count() / 1000.0;
-  auto memcpy_time = std::chrono::duration_cast<std::chrono::microseconds>(t_memcpy_end - t_memcpy_start).count() / 1000.0;
-  auto kernel1_time = std::chrono::duration_cast<std::chrono::microseconds>(t_kernel1_end - t_kernel1_start).count() / 1000.0;
-  auto kernel2_time = std::chrono::duration_cast<std::chrono::microseconds>(t_kernel2_end - t_kernel2_start).count() / 1000.0;
-  auto kernel3_time = need_gradients ? std::chrono::duration_cast<std::chrono::microseconds>(t_kernel3_end - t_kernel3_start).count() / 1000.0 : 0.0;
-  auto kernel4_time = (needs_gradient(flags) || needs_hessian(flags)) ? 
+  malloc_time = std::chrono::duration_cast<std::chrono::microseconds>(t_malloc_end - t_malloc_start).count() / 1000.0;
+  memcpy_time = std::chrono::duration_cast<std::chrono::microseconds>(t_memcpy_end - t_memcpy_start).count() / 1000.0;
+  kernel1_time = std::chrono::duration_cast<std::chrono::microseconds>(t_kernel1_end - t_kernel1_start).count() / 1000.0;
+  kernel2_time = std::chrono::duration_cast<std::chrono::microseconds>(t_kernel2_end - t_kernel2_start).count() / 1000.0;
+  kernel3_time = need_gradients ? std::chrono::duration_cast<std::chrono::microseconds>(t_kernel3_end - t_kernel3_start).count() / 1000.0 : 0.0;
+  kernel4_time = (needs_gradient(flags) || needs_hessian(flags)) ?
                       std::chrono::duration_cast<std::chrono::microseconds>(t_kernel4_end - t_kernel4_start).count() / 1000.0 : 0.0;
-  auto result_time = std::chrono::duration_cast<std::chrono::microseconds>(t_result_end - t_result_start).count() / 1000.0;
-  auto total_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end_total - t_start_total).count() / 1000.0;
+  result_time = std::chrono::duration_cast<std::chrono::microseconds>(t_result_end - t_result_start).count() / 1000.0;
+  total_time = std::chrono::duration_cast<std::chrono::microseconds>(t_end_total - t_start_total).count() / 1000.0;
   
   // Print timing information if profiling is enabled
   if (enable_profiling) {

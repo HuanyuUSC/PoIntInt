@@ -328,7 +328,7 @@ void compute_Ak_triangle_mesh_cuda_wrapper(
   
   int Q = (int)kgrid.kmag.size();
   int num_vertices = (int)(dofs.size() / 3);
-  
+
   TriPacked* d_tris = nullptr;
   double3* d_kdirs = nullptr;
   double* d_kmags = nullptr;
@@ -336,7 +336,8 @@ void compute_Ak_triangle_mesh_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_vertex_positions;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -344,30 +345,30 @@ void compute_Ak_triangle_mesh_cuda_wrapper(
       goto cleanup; \
     } \
   } while(0)
-  
+
   CUDA_CHECK(cudaMalloc(&d_tris, num_tris * sizeof(TriPacked)));
   CUDA_CHECK(cudaMalloc(&d_kdirs, Q * sizeof(double3)));
   CUDA_CHECK(cudaMalloc(&d_kmags, Q * sizeof(double)));
   CUDA_CHECK(cudaMalloc(&d_vertex_positions, num_vertices * 3 * sizeof(double)));
-  
+
   // Copy data to device
   CUDA_CHECK(cudaMemcpy(d_tris, geom.tris.data(), num_tris * sizeof(TriPacked), cudaMemcpyHostToDevice));
-  
+
   h_kdirs.resize(Q);
   for (int q = 0; q < Q; ++q) {
     h_kdirs[q] = make_double3(kgrid.dirs[q][0], kgrid.dirs[q][1], kgrid.dirs[q][2]);
   }
   CUDA_CHECK(cudaMemcpy(d_kdirs, h_kdirs.data(), Q * sizeof(double3), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_kmags, kgrid.kmag.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
-  
+
   h_vertex_positions.resize(num_vertices * 3);
   for (int i = 0; i < num_vertices * 3; ++i) {
     h_vertex_positions[i] = dofs(i);
   }
   CUDA_CHECK(cudaMemcpy(d_vertex_positions, h_vertex_positions.data(), num_vertices * 3 * sizeof(double), cudaMemcpyHostToDevice));
-  
+
   // Launch kernel
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
   compute_A_triangle_mesh_kernel<<<grid, block>>>(
@@ -401,7 +402,7 @@ void compute_Ak_gradient_triangle_mesh_cuda_wrapper(
   int Q = (int)kgrid.kmag.size();
   int num_vertices = (int)(dofs.size() / 3);
   int num_dofs = 3 * num_vertices;
-  
+
   TriPacked* d_tris = nullptr;
   double3* d_kdirs = nullptr;
   double* d_kmags = nullptr;
@@ -409,7 +410,8 @@ void compute_Ak_gradient_triangle_mesh_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_vertex_positions;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -417,30 +419,30 @@ void compute_Ak_gradient_triangle_mesh_cuda_wrapper(
       goto cleanup; \
     } \
   } while(0)
-  
+
   CUDA_CHECK(cudaMalloc(&d_tris, num_tris * sizeof(TriPacked)));
   CUDA_CHECK(cudaMalloc(&d_kdirs, Q * sizeof(double3)));
   CUDA_CHECK(cudaMalloc(&d_kmags, Q * sizeof(double)));
   CUDA_CHECK(cudaMalloc(&d_vertex_positions, num_vertices * 3 * sizeof(double)));
-  
+
   // Copy data to device
   CUDA_CHECK(cudaMemcpy(d_tris, geom.tris.data(), num_tris * sizeof(TriPacked), cudaMemcpyHostToDevice));
-  
+
   h_kdirs.resize(Q);
   for (int q = 0; q < Q; ++q) {
     h_kdirs[q] = make_double3(kgrid.dirs[q][0], kgrid.dirs[q][1], kgrid.dirs[q][2]);
   }
   CUDA_CHECK(cudaMemcpy(d_kdirs, h_kdirs.data(), Q * sizeof(double3), cudaMemcpyHostToDevice));
   CUDA_CHECK(cudaMemcpy(d_kmags, kgrid.kmag.data(), Q * sizeof(double), cudaMemcpyHostToDevice));
-  
+
   h_vertex_positions.resize(num_vertices * 3);
   for (int i = 0; i < num_vertices * 3; ++i) {
     h_vertex_positions[i] = dofs(i);
   }
   CUDA_CHECK(cudaMemcpy(d_vertex_positions, h_vertex_positions.data(), num_vertices * 3 * sizeof(double), cudaMemcpyHostToDevice));
-  
+
   // Launch kernel (each thread handles one k-point)
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
   compute_A_gradient_triangle_mesh_kernel<<<grid, block>>>(

@@ -1,7 +1,15 @@
 #pragma once
 #include <vector>
+#ifdef _WIN32
 #include <corecrt_math_defines.h>
+#else
+#define _USE_MATH_DEFINES
+#endif
 #include <cmath>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 #include <utility>
 
 // Classic Newton solve of Legendre P_n roots; maps to [a,b].

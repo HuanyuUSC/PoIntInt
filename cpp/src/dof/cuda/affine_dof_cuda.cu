@@ -882,7 +882,8 @@ void compute_Ak_affine_triangle_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_dofs;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -913,7 +914,7 @@ void compute_Ak_affine_triangle_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
   compute_A_affine_triangle_kernel<<<grid, block>>>(
@@ -959,7 +960,8 @@ void compute_Ak_gradient_affine_triangle_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_dofs;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -990,7 +992,7 @@ void compute_Ak_gradient_affine_triangle_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
   compute_A_gradient_affine_triangle_kernel<<<grid, block>>>(
@@ -1036,7 +1038,8 @@ void compute_Ak_affine_disk_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_dofs;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -1067,7 +1070,7 @@ void compute_Ak_affine_disk_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
   compute_A_affine_disk_kernel<<<grid, block>>>(
@@ -1114,7 +1117,8 @@ void compute_Ak_gradient_affine_disk_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_dofs;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -1145,7 +1149,7 @@ void compute_Ak_gradient_affine_disk_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
   compute_A_gradient_affine_disk_kernel<<<grid, block>>>(
@@ -1191,7 +1195,8 @@ void compute_Ak_affine_gaussian_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_dofs;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -1222,7 +1227,7 @@ void compute_Ak_affine_gaussian_cuda_wrapper(
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
   // Launch kernel
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
   compute_A_affine_gaussian_kernel<<<grid, block>>>(
@@ -1268,7 +1273,8 @@ void compute_Ak_gradient_affine_gaussian_cuda_wrapper(
   std::vector<double3> h_kdirs;
   std::vector<double> h_dofs;
   dim3 grid, block;
-  
+  int actualBlockSize = 0;
+
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
     if (err != cudaSuccess) { \
@@ -1298,7 +1304,7 @@ void compute_Ak_gradient_affine_gaussian_cuda_wrapper(
   }
   CUDA_CHECK(cudaMemcpy(d_dofs, h_dofs.data(), 12 * sizeof(double), cudaMemcpyHostToDevice));
   
-  int actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
+  actualBlockSize = std::min(blockSize, MAX_BLOCK_SIZE);
   // Launch kernel (each block handles one k-point, threads process Gaussians)
   grid = dim3(Q, 1);
   block = dim3(actualBlockSize);
