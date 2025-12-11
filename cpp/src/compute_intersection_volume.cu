@@ -237,6 +237,8 @@ IntersectionVolumeResult compute_intersection_volume_cuda(
   std::string dof1_type, dof2_type;
   std::pair<CudaComputeAkFunc, CudaComputeAkGradientFunc> kernels1, kernels2;
   std::vector<double> h_weights;
+  double h_volume = 0.0;
+  const double scale = 1.0 / (8.0 * CUDART_PI * CUDART_PI * CUDART_PI);
   
   #define CUDA_CHECK(call) do { \
     cudaError_t err = call; \
@@ -377,7 +379,6 @@ IntersectionVolumeResult compute_intersection_volume_cuda(
   t_result_start = t_kernel4_end;
   
   // Copy results back
-  double h_volume = 0.0;
   CUDA_CHECK(cudaMemcpy(&h_volume, d_volume, sizeof(double), cudaMemcpyDeviceToHost));
   
   if (needs_gradient(flags) || needs_hessian(flags)) {
@@ -409,7 +410,6 @@ IntersectionVolumeResult compute_intersection_volume_cuda(
   t_result_end = std::chrono::high_resolution_clock::now();
   
   // Apply scaling factor: 1/(8π³)
-  const double scale = 1.0 / (8.0 * CUDART_PI * CUDART_PI * CUDART_PI);
   result.volume = h_volume * scale;
   if (needs_gradient(flags)) {
     result.grad_geom1 *= scale;

@@ -217,8 +217,8 @@ Planned / current components:
 
 - [x] Theory note: derivation of double surface integral and literature survey  
 - [x] Analytic reference implementations for cube / sphere form factors  
-- [ ] Mesh-based discretisation of $\partial\Omega$ and numerical evaluation of $F_n(k_q)$  
-- [ ] GPU implementation of the k-space sampling and $J^\top D J$  
+- [x] Mesh-based discretisation of $\partial\Omega$ and numerical evaluation of $F_n(k_q)$  
+- [x] GPU implementation of the k-space sampling and $J^\top D J$  
 - [ ] Experiments on:
   - shape similarity based on overlap volume,
   - clustering / kernels built from $V$,
@@ -229,3 +229,12 @@ Planned / current components:
 ## 8. License
 
 TBD.
+
+## 9. Demos
+
+<p align="center">
+  <img src="demo/mesh.gif" alt="Intersection volume demo 1" width="380">
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="demo/simple.gif" alt="Intersection volume demo 2" width="380">
+</p>
+

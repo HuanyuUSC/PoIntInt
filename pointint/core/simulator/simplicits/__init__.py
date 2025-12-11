@@ -1,11 +1,16 @@
-from .skinning import *
-from .precomputed import *
-from .easy_api import *
-from .losses import *
-from .losses_warp import *
-from .network import *
+import pointint.core.simulator.simplicits.skinning as skinning
+import pointint.core.simulator.simplicits.precomputed as precomputed
+import pointint.core.simulator.simplicits.easy_api as easy_api
+import pointint.core.simulator.simplicits.losses as losses
+import pointint.core.simulator.simplicits.losses_warp as losses_warp
+import pointint.core.simulator.simplicits.network as network
 
-from . import skinning, precomputed, easy_api, losses, losses_warp, network
+from pointint.core.simulator.simplicits.skinning import *
+from pointint.core.simulator.simplicits.precomputed import *
+from pointint.core.simulator.simplicits.easy_api import *
+from pointint.core.simulator.simplicits.losses import *
+from pointint.core.simulator.simplicits.losses_warp import *
+from pointint.core.simulator.simplicits.network import *
 
 __all__ = (
     getattr(skinning, '__all__', []) +
