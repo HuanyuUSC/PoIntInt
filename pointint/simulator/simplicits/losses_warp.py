@@ -18,10 +18,10 @@ from functools import partial
 import warp as wp
 
 
-import pointint.materials.material_utils as material_utils
-import pointint.materials.linear_elastic_material as linear_elastic_material
-import pointint.materials.neohookean_elastic_material as neohookean_elastic_material
-from pointint.simplicits.losses import loss_ortho
+import pointint.core.simulator.materials.material_utils as material_utils
+import pointint.core.simulator.materials.linear_elastic_material as linear_elastic_material
+import pointint.core.simulator.materials.neohookean_elastic_material as neohookean_elastic_material
+from pointint.core.simulator.simplicits.losses import loss_ortho
 
 wp.config.quiet = True
 wp.init()

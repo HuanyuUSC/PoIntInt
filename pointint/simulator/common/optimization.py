@@ -18,7 +18,7 @@ from loguru import logger
 import warp as wp
 from warp.optim.linear import cg, preconditioner
 
-from pointint.utils import _wp_bsr_to_torch_bsr
+from pointint.core.simulator.utils.warp_utilities import _wp_bsr_to_torch_bsr
 
 __all__ = ['newtons_method']
 

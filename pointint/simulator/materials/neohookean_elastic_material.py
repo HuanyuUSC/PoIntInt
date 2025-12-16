@@ -15,7 +15,7 @@
 
 import warp as wp
 import torch
-from pointint.utils.warp_utilities import mat99
+from pointint.core.simulator.utils.warp_utilities import mat99
 
 __all__ = [
     'NeohookeanElasticMaterial'

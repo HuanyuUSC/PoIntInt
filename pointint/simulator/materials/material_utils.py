@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import warp as wp
-from pointint.utils.warp_utilities import mat99
+from pointint.core.simulator.utils.warp_utilities import mat99
 
 __all__ = [
     "to_lame", "get_defo_grad"

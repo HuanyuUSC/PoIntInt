@@ -21,9 +21,9 @@ import numpy as np
 import torch
 import warp.sparse as wps
 
-from pointint.utils import finite_diff_jac
-from pointint.utils.warp_utilities import _warp_csr_from_torch_dense
-from pointint.simplicits import  weight_function_lbs
+from pointint.core.simulator.utils.finite_diff import finite_diff_jac
+from pointint.core.simulator.utils.warp_utilities import _warp_csr_from_torch_dense
+from pointint.core.simulator.simplicits.skinning import weight_function_lbs
 
 __all__ = [
     "sparse_lbs_matrix", 

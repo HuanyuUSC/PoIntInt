@@ -4,17 +4,7 @@ import torch
 import kaolin as kal
 from loguru import logger
 import numpy as np
-import pyvista as pv
-from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import (
-    QApplication,
-    QHBoxLayout,
-    QMainWindow,
-    QPushButton,
-    QVBoxLayout,
-    QWidget,
-)
-from pyvistaqt import QtInteractor
+from tqdm import tqdm
 import warp as wp
 
 import pointint
