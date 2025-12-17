@@ -23,7 +23,7 @@ from warp.optim.linear import LinearOperator
 from warp.fem.linalg import inverse_qr
 
 
-import pointint.utils.torch_utilities as torch_utilities
+import pointint.core.simulator.utils.torch_utilities as torch_utilities
 
 __all__ = ["_wp_bsr_to_torch_bsr",
            "_bsr_to_torch",

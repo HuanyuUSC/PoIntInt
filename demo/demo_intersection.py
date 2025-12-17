@@ -18,6 +18,15 @@ import os
 # Import our C++ bindings
 import pointint_cpp as pi
 
+# Warp backends
+import warp as wp
+from pointint.core.intersection import (
+    build_kgrid as build_kgrid_warp,
+    load_lebedev as load_lebedev_warp,
+)
+from pointint.core.intersection.volume import intersection_volume_mesh
+from pointint.core.intersection.volume_direct import intersection_volume_direct
+
 # ============================================================================
 # Setup
 # ============================================================================
@@ -38,6 +47,12 @@ dirs, weights = pi.load_lebedev(lebedev_path)
 kgrid = pi.build_kgrid(dirs, weights, 32)
 print(f"KGrid created with {len(dirs) * 32} nodes")
 
+# Warp setup
+wp.init()
+leb_dirs_warp, leb_w_warp = load_lebedev_warp(lebedev_path)
+kgrid_warp = build_kgrid_warp(leb_dirs_warp, leb_w_warp, n_radial=32)
+print(f"Warp KGrid created")
+
 # Pre-create geometries
 V_cube, F_cube = pi.create_unit_cube_mesh()
 P_sphere, N_sphere, R_sphere = pi.create_sphere_pointcloud(1000)
@@ -57,8 +72,8 @@ with server.gui.add_folder("Settings"):
     )
     backend_dropdown = server.gui.add_dropdown(
         "Backend",
-        options=["CUDA", "CPU"],
-        initial_value="CUDA"
+        options=["Warp Fourier", "Warp Direct", "C++ CUDA", "C++ CPU"],
+        initial_value="Warp Fourier"
     )
     distance_slider = server.gui.add_slider(
         "Distance",
@@ -86,27 +101,32 @@ with server.gui.add_folder("Results"):
 # ============================================================================
 
 def update(_=None):
-    global kgrid
+    global kgrid, kgrid_warp
 
     d = distance_slider.value
     mode = mode_dropdown.value
-    use_cuda = backend_dropdown.value == "CUDA"
+    backend = backend_dropdown.value
     n_radial = int(n_radial_slider.value)
 
-    # Rebuild kgrid if n_radial changed
+    # Rebuild kgrids if n_radial changed
     kgrid = pi.build_kgrid(dirs, weights, n_radial)
+    kgrid_warp = build_kgrid_warp(leb_dirs_warp, leb_w_warp, n_radial)
 
     if mode == "Box-Box":
         # Two unit cubes, second one translated along x-axis
-        V2 = pi.translate_points(V_cube, np.array([d, 0.0, 0.0]))
+        V2 = V_cube + np.array([d, 0.0, 0.0])
         geom1 = pi.make_triangle_mesh(V_cube, F_cube)
         geom2 = pi.make_triangle_mesh(V2, F_cube)
 
         # Compute intersection volume
         t0 = time.time()
-        if use_cuda:
+        if backend == "Warp Fourier":
+            vol_ours = intersection_volume_mesh(V_cube, F_cube, V2, F_cube, kgrid_warp)
+        elif backend == "Warp Direct":
+            vol_ours = intersection_volume_direct(V_cube, F_cube, V2, F_cube)
+        elif backend == "C++ CUDA":
             vol_ours = pi.compute_intersection_volume_cuda(geom1, geom2, kgrid)
-        else:
+        else:  # C++ CPU
             vol_ours = pi.compute_intersection_volume_cpu(geom1, geom2, kgrid)
         elapsed = time.time() - t0
 
@@ -133,15 +153,18 @@ def update(_=None):
         )
 
     else:  # Sphere-Sphere (point cloud)
-        P2 = pi.translate_points(P_sphere, np.array([d, 0.0, 0.0]))
+        P2 = P_sphere + np.array([d, 0.0, 0.0])
         geom1 = pi.make_point_cloud(P_sphere, N_sphere, R_sphere)
         geom2 = pi.make_point_cloud(P2, N_sphere, R_sphere)
 
-        # Compute intersection volume
+        # Compute intersection volume (Warp backends not supported for point cloud)
         t0 = time.time()
-        if use_cuda:
+        if backend in ["Warp Fourier", "Warp Direct"]:
+            # Fall back to C++ CUDA for point cloud
             vol_ours = pi.compute_intersection_volume_cuda(geom1, geom2, kgrid)
-        else:
+        elif backend == "C++ CUDA":
+            vol_ours = pi.compute_intersection_volume_cuda(geom1, geom2, kgrid)
+        else:  # C++ CPU
             vol_ours = pi.compute_intersection_volume_cpu(geom1, geom2, kgrid)
         elapsed = time.time() - t0
 

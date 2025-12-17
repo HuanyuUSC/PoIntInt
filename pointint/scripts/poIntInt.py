@@ -75,7 +75,7 @@ def demo(R=1.0, d=1.6, n=200, eps=1e-6, seed=0):
     abs_err_direct = abs(V_direct - V_exact)
     rel_err_direct = abs_err_direct / V_exact if V_exact > 0 else (0.0 if abs(V_direct) < 1e-14 else np.inf)
 
-    print(f"d={d}, n={n}, eps={eps}")
+    print(f"d={d}, n={n}, eps={eps}")-
     print(f"  V_exact = {V_exact:.10f}")
     print(f"  V_fmm   = {V_fmm:.10f}")
     print(f"  V_direct   = {V_direct:.10f}")

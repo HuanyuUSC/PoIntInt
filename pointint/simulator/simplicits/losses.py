@@ -16,12 +16,12 @@
 import torch
 import torch.nn as nn
 from functools import partial
-from pointint.materials import (
+from pointint.core.simulator.materials import (
     material_utils,
     linear_elastic_material,
     neohookean_elastic_material)
-from pointint.simplicits import weight_function_lbs
-from pointint.utils.finite_diff import finite_diff_jac
+from pointint.core.simulator.simplicits.skinning import weight_function_lbs
+from pointint.core.simulator.utils.finite_diff import finite_diff_jac
 
 __all__ = [
     'loss_ortho',

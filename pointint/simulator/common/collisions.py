@@ -18,8 +18,8 @@ import torch
 import warp as wp
 import warp.sparse as wps
 
-from pointint.simplicits.precomputed import sparse_collision_jacobian_matrix
-from pointint.utils.warp_utilities import _bsr_to_torch
+from pointint.core.simulator.simplicits.precomputed import sparse_collision_jacobian_matrix
+from pointint.core.simulator.utils.warp_utilities import _bsr_to_torch
 
 __all__ = ['Collision']
 

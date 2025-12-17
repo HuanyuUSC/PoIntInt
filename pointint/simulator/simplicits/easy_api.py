@@ -23,18 +23,19 @@ from tqdm.auto import tqdm
 
 from functools import partial
 
-from pointint.simplicits.losses import compute_losses
-from pointint.simplicits.network import SimplicitsMLP
+from pointint.core.simulator.simplicits.losses import compute_losses
+from pointint.core.simulator.simplicits.network import SimplicitsMLP
 
-import pointint.utils.warp_utilities as warp_utilities
-import pointint.utils.torch_utilities as torch_utilities
+import pointint.core.simulator.utils.warp_utilities as warp_utilities
+import pointint.core.simulator.utils.torch_utilities as torch_utilities
 
-from pointint.common import Collision, Gravity, Floor, Boundary
-from pointint.materials import NeohookeanElasticMaterial
-from pointint.materials.material_utils import get_defo_grad, to_lame
-from pointint.common.optimization import newtons_method
-from pointint.simplicits.precomputed import sparse_lbs_matrix, sparse_dFdz_matrix_from_dense
-from pointint.simplicits.skinning import weight_function_lbs
+from pointint.core.simulator.common import Collision
+from pointint.core.simulator.common.scene_forces import Gravity, Floor, Boundary
+from pointint.core.simulator.materials import NeohookeanElasticMaterial
+from pointint.core.simulator.materials.material_utils import get_defo_grad, to_lame
+from pointint.core.simulator.common.optimization import newtons_method
+from pointint.core.simulator.simplicits.precomputed import sparse_lbs_matrix, sparse_dFdz_matrix_from_dense
+from pointint.core.simulator.simplicits.skinning import weight_function_lbs
 
 
 __all__ = [

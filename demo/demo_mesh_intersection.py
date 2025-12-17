@@ -22,6 +22,15 @@ import sys
 # Import our C++ bindings
 import pointint_cpp as pi
 
+# Warp backends
+import warp as wp
+from pointint.core.intersection import (
+    build_kgrid as build_kgrid_warp,
+    load_lebedev as load_lebedev_warp,
+)
+from pointint.core.intersection.volume import intersection_volume_mesh
+from pointint.core.intersection.volume_direct import intersection_volume_direct
+
 # ============================================================================
 # Mesh Loading
 # ============================================================================
@@ -78,6 +87,12 @@ dirs, weights = pi.load_lebedev(lebedev_path)
 kgrid = pi.build_kgrid(dirs, weights, 32)
 print(f"KGrid created with {len(dirs) * 32} nodes")
 
+# Warp setup
+wp.init()
+leb_dirs_warp, leb_w_warp = load_lebedev_warp(lebedev_path)
+kgrid_warp = build_kgrid_warp(leb_dirs_warp, leb_w_warp, n_radial=32)
+print(f"Warp KGrid created")
+
 # Pre-compute base geometry and its volume
 geom_base = pi.make_triangle_mesh(V, F)
 base_volume = pi.compute_volume_cpu(geom_base)
@@ -90,8 +105,8 @@ print(f"Base mesh volume: {base_volume:.6f}")
 with server.gui.add_folder("Settings"):
     backend_dropdown = server.gui.add_dropdown(
         "Backend",
-        options=["CUDA", "CPU"],
-        initial_value="CUDA"
+        options=["Warp Fourier", "Warp Direct", "C++ CUDA", "C++ CPU"],
+        initial_value="Warp Fourier"
     )
     distance_slider = server.gui.add_slider(
         "Distance",
@@ -126,15 +141,16 @@ with server.gui.add_folder("Results"):
 # ============================================================================
 
 def update(_=None):
-    global kgrid
+    global kgrid, kgrid_warp
 
     d = distance_slider.value
     direction = direction_dropdown.value
-    use_cuda = backend_dropdown.value == "CUDA"
+    backend = backend_dropdown.value
     n_radial = int(n_radial_slider.value)
 
-    # Rebuild kgrid if n_radial changed
+    # Rebuild kgrids if n_radial changed
     kgrid = pi.build_kgrid(dirs, weights, n_radial)
+    kgrid_warp = build_kgrid_warp(leb_dirs_warp, leb_w_warp, n_radial)
 
     # Create translation vector based on direction
     if direction == "X":
@@ -145,21 +161,25 @@ def update(_=None):
         translation = np.array([0.0, 0.0, d])
 
     # Translate second mesh
-    V2 = pi.translate_points(V, translation)
+    V2 = V + translation
 
-    # Create geometries
+    # Create C++ geometries (for C++ backends and volume computation)
     geom1 = pi.make_triangle_mesh(V, F)
     geom2 = pi.make_triangle_mesh(V2, F)
 
     # Compute volumes
-    t0 = time.time()
     vol1 = pi.compute_volume_cpu(geom1)
     vol2 = pi.compute_volume_cpu(geom2)
 
     # Compute intersection volume
-    if use_cuda:
+    t0 = time.time()
+    if backend == "Warp Fourier":
+        intersection_vol = intersection_volume_mesh(V, F, V2, F, kgrid_warp)
+    elif backend == "Warp Direct":
+        intersection_vol = intersection_volume_direct(V, F, V2, F)
+    elif backend == "C++ CUDA":
         intersection_vol = pi.compute_intersection_volume_cuda(geom1, geom2, kgrid)
-    else:
+    else:  # C++ CPU
         intersection_vol = pi.compute_intersection_volume_cpu(geom1, geom2, kgrid)
     elapsed = time.time() - t0
 
