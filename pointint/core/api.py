@@ -1,18 +1,40 @@
+import numpy as np
 from pointint.core.intersection import intersection_volume_direct
+from pointint.core.area import compute_voronoi_area_weights
+
 
 def get_ptcld_intersection_volume(
     P1: np.ndarray,
     N1: np.ndarray,
-    W1: np.ndarray,
     P2: np.ndarray,
     N2: np.ndarray,
-    W2: np.ndarray,
     eps: float = 1e-3,
+    k_neighbors: int = 30,
     device: str = None,
 ) -> float:
     """
-    Compute intersection volume between two oriented disk clouds.
+    Compute intersection volume between two oriented point clouds.
+
+    Area weights are computed automatically via Voronoi cell cross-sections
+    (GCNO paper, Sec 4.4).
+
+    Args:
+        P1: Positions of cloud 1, shape (N1, 3)
+        N1: Unit normals of cloud 1, shape (N1, 3)
+        P2: Positions of cloud 2, shape (N2, 3)
+        N2: Unit normals of cloud 2, shape (N2, 3)
+        eps: Regularization parameter (default 1e-3)
+        k_neighbors: Max neighbors for Voronoi cell construction (default 30)
+        device: Computation device
+
+    Returns:
+        Intersection volume as scalar float
+
+    Example:
+        >>> vol = get_ptcld_intersection_volume(P1, N1, P2, N2)
     """
+    W1 = compute_voronoi_area_weights(P1, k_neighbors=k_neighbors)
+    W2 = compute_voronoi_area_weights(P2, k_neighbors=k_neighbors)
     return intersection_volume_direct(P1, N1, W1, P2, N2, W2, eps=eps, device=device)
 
 
@@ -46,43 +68,6 @@ def get_mesh_intersection_volume(
     x, n1, w = _mesh_to_points(vertices1, faces1)
     y, n2, v = _mesh_to_points(vertices2, faces2)
     return pointint_volume(x, n1, w, y, n2, v, eps=eps, device=device)
-
-
-def pointint_volume_pointcloud(
-    P1: np.ndarray,
-    N1: np.ndarray,
-    R1: np.ndarray,
-    P2: np.ndarray,
-    N2: np.ndarray,
-    R2: np.ndarray,
-    eps: float = 1e-3,
-    device: str = None,
-) -> float:
-    """
-    Compute intersection volume between two oriented disk clouds.
-
-    Each point is treated as a disk with area = π * r².
-
-    Args:
-        P1: Positions of cloud 1, shape (N1, 3)
-        N1: Unit normals of cloud 1, shape (N1, 3)
-        R1: Disk radii of cloud 1, shape (N1,)
-        P2: Positions of cloud 2, shape (N2, 3)
-        N2: Unit normals of cloud 2, shape (N2, 3)
-        R2: Disk radii of cloud 2, shape (N2,)
-        eps: Regularization parameter (default 1e-3)
-        device: Warp device
-
-    Returns:
-        Intersection volume as scalar float
-
-    Example:
-        >>> vol = pointint_volume_pointcloud(P1, N1, R1, P2, N2, R2)
-    """
-    w = np.pi * R1 * R1  # disk area
-    v = np.pi * R2 * R2
-    return pointint_volume(P1, N1, w, P2, N2, v, eps=eps, device=device)
-
 
 # =============================================================================
 # Helpers
